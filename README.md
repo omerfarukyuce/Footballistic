@@ -92,6 +92,24 @@ pip install -r requirements.txt
 
 ---
 
+## 🖥️ Running the Interactive Web Dashboard
+
+To launch the interactive Streamlit football analytics studio:
+
+```bash
+streamlit run app.py
+```
+
+From the dashboard, you can:
+- **Upload** your own tactical match video or use the included sample.
+- **Run match analysis** with customizable tracking frames and detection confidence.
+- **Watch the annotated replay** with persistent player IDs and ball tracking.
+- **Inspect team heatmaps & tactical formations** directly on the pitch.
+- **Deep-dive into individual players**: inspect individual heatmaps, presence rates, and movement trajectories.
+- **Export** player spatial data directly to CSV.
+
+---
+
 ## 🤝 Contributing
 
 Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/omerfarukyuce/Footballistic/issues).

@@ -6,6 +6,7 @@ and generates spatial heatmaps & average formations.
 
 import os
 import argparse
+from typing import Callable, Dict, Optional
 import cv2
 import numpy as np
 from tqdm import tqdm
@@ -24,8 +25,13 @@ def run_pipeline(
     video_path: str = "data/sample_videos/sample.mp4",
     output_dir: str = "output",
     max_frames: int = 150,  # Process first 150 frames (~6 sec) for fast MVP verification
-    model_name: str = "weights/yolov8m.pt"
-):
+    model_name: str = "weights/yolov8m.pt",
+    confidence: float = 0.35,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None
+) -> Dict:
+    """
+    Executes the full computer vision analysis pipeline.
+    """
     print("=" * 60)
     print("⚽ FOOTBALLISTIC: MATCH ANALYTICS ENGINE (PHASE 1)")
     print("=" * 60)
@@ -39,14 +45,21 @@ def run_pipeline(
     frames_to_process = min(max_frames, video_info["total_frames"]) if max_frames > 0 else video_info["total_frames"]
     print(f"⏱️  Frames to analyze: {frames_to_process}")
 
+    if progress_callback:
+        progress_callback(0, frames_to_process, "Initializing Vision & Tracking Models...")
+
     # 1. Initialize modules
     print("\n🧠 Initializing Vision & Tracking Modules...")
-    detector = FootballDetector(model_path=model_name, confidence=0.35)
+    detector = FootballDetector(model_path=model_name, confidence=confidence)
     team_assigner = TeamColorAssigner()
     spatial_analytics = SpatialAnalytics(video_info["width"], video_info["height"])
+    spatial_analytics.set_total_frames(frames_to_process)
 
     # 2. Step 1: Pre-fit Team Colors from initial frames
     print("👕 Calibrating Team Jersey Colors from sample frames...")
+    if progress_callback:
+        progress_callback(0, frames_to_process, "Calibrating Team Colors...")
+        
     sampled_colors = []
     sample_stride = 5
     for f_idx, frame in video.frame_generator():
@@ -126,12 +139,17 @@ def run_pipeline(
         writer.write(annotated_frame)
         pbar.update(1)
 
+        if progress_callback and f_idx % 5 == 0:
+            progress_callback(f_idx + 1, frames_to_process, f"Tracking players... Frame {f_idx + 1}/{frames_to_process}")
+
     pbar.close()
     writer.release()
     print(f"\n🎥 Analyzed video saved to: {output_video_path}")
 
     # 5. Step 3: Spatial Post-Processing (Heatmaps & Formations)
     print("\n🗺️ Generating Heatmaps & Average Formations...")
+    if progress_callback:
+        progress_callback(frames_to_process, frames_to_process, "Generating Heatmaps and Tactical Formations...")
     
     # Team 0 Heatmap
     team0_heatmap = spatial_analytics.generate_heatmap(team_id=0)
@@ -144,6 +162,7 @@ def run_pipeline(
     cv2.imwrite(team1_path, team1_heatmap)
 
     # Overlay Heatmap onto first frame for tactical context
+    overlay_path = os.path.join(output_dir, "heatmap_pitch_overlay.png")
     if first_frame_saved is not None:
         combined_overlay = first_frame_saved.copy()
         nonzero_mask = np.any(team0_heatmap > 0, axis=-1) | np.any(team1_heatmap > 0, axis=-1)
@@ -153,10 +172,10 @@ def run_pipeline(
             blended[nonzero_mask], 0.6,
             0
         )
-        overlay_path = os.path.join(output_dir, "heatmap_pitch_overlay.png")
         cv2.imwrite(overlay_path, combined_overlay)
 
     # Average Formations
+    formation_path = os.path.join(output_dir, "average_positions.png")
     avg_positions = spatial_analytics.get_average_positions()
     if first_frame_saved is not None:
         formation_img = TacticalVisualizer.draw_average_positions(
@@ -164,15 +183,31 @@ def run_pipeline(
             avg_positions,
             spatial_analytics.player_teams
         )
-        formation_path = os.path.join(output_dir, "average_positions.png")
         cv2.imwrite(formation_path, formation_img)
 
+    first_frame_path = os.path.join(output_dir, "first_frame.png")
+    if first_frame_saved is not None:
+        cv2.imwrite(first_frame_path, first_frame_saved)
+
     print(f"📊 Heatmaps saved to: {team0_path} & {team1_path}")
-    print(f"📍 Average positions saved to: {os.path.join(output_dir, 'average_positions.png')}")
+    print(f"📍 Average positions saved to: {formation_path}")
     print(f"\n✅ Total unique players tracked: {len(avg_positions)}")
     print("=" * 60)
     print("🎉 Phase 1 Pipeline Completed Successfully!")
     print("=" * 60)
+
+    return {
+        "output_video_path": output_video_path,
+        "spatial_analytics": spatial_analytics,
+        "first_frame": first_frame_saved,
+        "first_frame_path": first_frame_path,
+        "team0_heatmap_path": team0_path,
+        "team1_heatmap_path": team1_path,
+        "overlay_path": overlay_path,
+        "formation_path": formation_path,
+        "video_info": video_info,
+        "total_players": len(avg_positions)
+    }
 
 
 if __name__ == "__main__":
@@ -180,6 +215,7 @@ if __name__ == "__main__":
     parser.add_argument("--video", type=str, default="data/sample_videos/sample.mp4", help="Path to input video")
     parser.add_argument("--output", type=str, default="output", help="Output directory")
     parser.add_argument("--frames", type=int, default=150, help="Max frames to process (0 for all)")
+    parser.add_argument("--conf", type=float, default=0.35, help="Detection confidence")
     args = parser.parse_args()
 
-    run_pipeline(video_path=args.video, output_dir=args.output, max_frames=args.frames)
+    run_pipeline(video_path=args.video, output_dir=args.output, max_frames=args.frames, confidence=args.conf)

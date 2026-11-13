@@ -30,3 +30,4 @@ class FootballTracker:
         """
         tracked_detections = self.tracker.update_with_detections(detections)
         return tracked_detections
+

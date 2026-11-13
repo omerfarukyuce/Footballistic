@@ -118,3 +118,4 @@ class TacticalVisualizer:
                 cv2.LINE_AA
             )
         return canvas
+

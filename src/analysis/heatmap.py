@@ -1,5 +1,5 @@
 """
-Heatmap and average position spatial analytics module.
+Heatmap, trajectory, and average position spatial analytics module.
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -9,7 +9,7 @@ from scipy.ndimage import gaussian_filter
 
 
 class SpatialAnalytics:
-    """Computes player movement heatmaps and average pitch positions."""
+    """Computes player movement heatmaps, trajectories, and average pitch positions."""
 
     def __init__(self, frame_width: int = 1920, frame_height: int = 1080):
         self.width = frame_width
@@ -18,6 +18,7 @@ class SpatialAnalytics:
         self.player_tracks: Dict[int, List[Tuple[float, float]]] = {}
         # Mapping from tracker_id to team_id
         self.player_teams: Dict[int, int] = {}
+        self.total_processed_frames: int = 0
 
     def add_position(self, tracker_id: int, bbox: List[float], team_id: int):
         """
@@ -32,6 +33,9 @@ class SpatialAnalytics:
         self.player_tracks[tracker_id].append((bottom_center_x, bottom_center_y))
         self.player_teams[tracker_id] = team_id
 
+    def set_total_frames(self, frames: int):
+        self.total_processed_frames = max(1, frames)
+
     def get_average_positions(self) -> Dict[int, Tuple[float, float]]:
         """
         Calculates average (mean) (x, y) position for each player.
@@ -42,6 +46,31 @@ class SpatialAnalytics:
                 coords = np.array(positions)
                 avg_positions[tracker_id] = (float(np.mean(coords[:, 0])), float(np.mean(coords[:, 1])))
         return avg_positions
+
+    def get_player_summary(self) -> List[Dict]:
+        """
+        Returns structured summary table of all tracked players.
+        """
+        summary = []
+        avg_pos = self.get_average_positions()
+        total_f = max(1, self.total_processed_frames)
+
+        for p_id in sorted(self.player_tracks.keys()):
+            positions = self.player_tracks[p_id]
+            team_id = self.player_teams.get(p_id, 0)
+            avg_x, avg_y = avg_pos.get(p_id, (0.0, 0.0))
+            
+            summary.append({
+                "Player ID": f"#{p_id}",
+                "Raw ID": p_id,
+                "Team": f"Team {team_id}",
+                "Team ID": team_id,
+                "Frames Active": len(positions),
+                "Presence (%)": round((len(positions) / total_f) * 100, 1),
+                "Avg X (px)": round(avg_x, 1),
+                "Avg Y (px)": round(avg_y, 1),
+            })
+        return summary
 
     def generate_heatmap(
         self,
@@ -86,6 +115,71 @@ class SpatialAnalytics:
         heatmap_bgr = cv2.applyColorMap(density, cv2.COLORMAP_JET)
         
         # Zero out areas with negligible density
-        mask = density < 10
+        mask = density < 8
         heatmap_bgr[mask] = 0
         return heatmap_bgr
+
+    def generate_player_overlay(
+        self,
+        tracker_id: int,
+        background_frame: np.ndarray,
+        sigma: float = 20.0
+    ) -> np.ndarray:
+        """
+        Generates a heatmap for a single player overlaid onto the match background frame.
+        """
+        heatmap_bgr = self.generate_heatmap(tracker_id=tracker_id, sigma=sigma)
+        overlay = background_frame.copy()
+        nonzero_mask = np.any(heatmap_bgr > 0, axis=-1)
+
+        if np.any(nonzero_mask):
+            overlay[nonzero_mask] = cv2.addWeighted(
+                overlay[nonzero_mask], 0.35,
+                heatmap_bgr[nonzero_mask], 0.65,
+                0
+            )
+            
+            # Also draw average position point on top of the heatmap
+            avg_positions = self.get_average_positions()
+            if tracker_id in avg_positions:
+                avg_x, avg_y = avg_positions[tracker_id]
+                center = (int(avg_x), int(avg_y))
+                cv2.circle(overlay, center, 14, (0, 0, 0), 3, cv2.LINE_AA)
+                cv2.circle(overlay, center, 11, (255, 255, 255), -1, cv2.LINE_AA)
+                cv2.circle(overlay, center, 7, (0, 0, 255), -1, cv2.LINE_AA)
+
+        return overlay
+
+    def generate_player_trajectory(
+        self,
+        tracker_id: int,
+        background_frame: np.ndarray
+    ) -> np.ndarray:
+        """
+        Draws the movement trajectory trail of a specific player over time.
+        """
+        canvas = background_frame.copy()
+        positions = self.player_tracks.get(tracker_id, [])
+        if len(positions) < 2:
+            return canvas
+
+        team_id = self.player_teams.get(tracker_id, 0)
+        trail_color = (255, 120, 0) if team_id == 0 else (0, 220, 100)
+
+        pts = np.array(positions, np.int32).reshape((-1, 1, 2))
+        cv2.polylines(canvas, [pts], isClosed=False, color=(0, 0, 0), thickness=5, lineType=cv2.LINE_AA)
+        cv2.polylines(canvas, [pts], isClosed=False, color=trail_color, thickness=3, lineType=cv2.LINE_AA)
+
+        # Draw Start Point (Green circle)
+        start_pt = (int(positions[0][0]), int(positions[0][1]))
+        cv2.circle(canvas, start_pt, 8, (0, 255, 0), -1, cv2.LINE_AA)
+        cv2.circle(canvas, start_pt, 9, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(canvas, "Start", (start_pt[0] + 10, start_pt[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
+
+        # Draw End Point (Red circle)
+        end_pt = (int(positions[-1][0]), int(positions[-1][1]))
+        cv2.circle(canvas, end_pt, 8, (0, 0, 255), -1, cv2.LINE_AA)
+        cv2.circle(canvas, end_pt, 9, (0, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(canvas, "Current", (end_pt[0] + 10, end_pt[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2, cv2.LINE_AA)
+
+        return canvas

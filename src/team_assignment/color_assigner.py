@@ -76,3 +76,4 @@ class TeamColorAssigner:
             raise RuntimeError("TeamColorAssigner must be fitted with fit_teams() first.")
         team_id = int(self.team_kmeans.predict([dominant_bgr])[0])
         return team_id
+

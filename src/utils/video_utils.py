@@ -64,3 +64,4 @@ def create_video_writer(
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     return cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
