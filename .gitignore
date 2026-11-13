@@ -39,6 +39,9 @@ output/
 data/videos/*.mp4
 data/videos/*.avi
 data/videos/*.mov
+data/sample_videos/*.mp4
+data/sample_videos/*.avi
+data/sample_videos/*.mov
 weights/*.pt
 !weights/.gitkeep
 
@@ -52,3 +55,4 @@ weights/*.pt
 .DS_Store
 Thumbs.db
 
+.ultralytics/

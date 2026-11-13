@@ -21,4 +21,5 @@ streamlit>=1.39.0
 # Utilities
 tqdm>=4.66.0
 pyyaml>=6.0.0
+lapx>=0.13.0
 
