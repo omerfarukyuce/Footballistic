@@ -36,7 +36,7 @@ class FootballDetector:
 
     def __init__(
         self,
-        model_path: str = "weights/yolov8m.pt",
+        model_path: str = "weights/yolo11m.pt",
         confidence: float = 0.35,
         iou: float = 0.5,
         device: Optional[str] = None

@@ -1,9 +1,10 @@
 """
-Footballistic: Main Pipeline Entrypoint for Phase 1.
+Footballistic: Main Pipeline Entrypoint.
 Processes match footage, tracks players and the ball, classifies teams,
-and generates spatial heatmaps & average formations.
+draws live motion trails, and generates spatial heatmaps & average formations.
 """
 
+from collections import defaultdict, deque
 import os
 import argparse
 from typing import Callable, Dict, Optional
@@ -24,32 +25,34 @@ os.environ["YOLO_CONFIG_DIR"] = os.path.abspath(".ultralytics")
 def run_pipeline(
     video_path: str = "data/sample_videos/sample.mp4",
     output_dir: str = "output",
-    max_frames: int = 150,  # Process first 150 frames (~6 sec) for fast MVP verification
-    model_name: str = "weights/yolov8m.pt",
+    max_frames: int = 0,  # 0 for full video (all 750 frames / 30 seconds)
+    model_name: str = "weights/yolo11m.pt",
     confidence: float = 0.35,
+    player_trail_len: int = 15,  # Recent frames trail for players
+    ball_trail_len: int = 40,    # Longer trail for the ball (passes & flight paths)
     progress_callback: Optional[Callable[[int, int, str], None]] = None
 ) -> Dict:
     """
     Executes the full computer vision analysis pipeline.
     """
     print("=" * 60)
-    print("⚽ FOOTBALLISTIC: MATCH ANALYTICS ENGINE (PHASE 1)")
+    print("⚽ FOOTBALLISTIC: MATCH ANALYTICS ENGINE")
     print("=" * 60)
     
     os.makedirs(output_dir, exist_ok=True)
     video = VideoHandler(video_path)
     video_info = video.get_info()
     print(f"📹 Input Video: {video_path}")
-    print(f"📊 Info: {video_info['width']}x{video_info['height']} @ {video_info['fps']} FPS | Total: {video_info['total_frames']} frames")
+    print(f"📊 Info: {video_info['width']}x{video_info['height']} @ {video_info['fps']} FPS | Total: {video_info['total_frames']} frames ({video_info['duration_sec']:.1f}s)")
     
     frames_to_process = min(max_frames, video_info["total_frames"]) if max_frames > 0 else video_info["total_frames"]
-    print(f"⏱️  Frames to analyze: {frames_to_process}")
+    print(f"⏱️  Frames to analyze: {frames_to_process} ({frames_to_process / video_info['fps']:.1f}s)")
 
     if progress_callback:
-        progress_callback(0, frames_to_process, "Initializing Vision & Tracking Models...")
+        progress_callback(0, frames_to_process, "Initializing YOLO11 & Vision Modules...")
 
     # 1. Initialize modules
-    print("\n🧠 Initializing Vision & Tracking Modules...")
+    print(f"\n🧠 Initializing Detector ({model_name})...")
     detector = FootballDetector(model_path=model_name, confidence=confidence)
     team_assigner = TeamColorAssigner()
     spatial_analytics = SpatialAnalytics(video_info["width"], video_info["height"])
@@ -80,7 +83,7 @@ def run_pipeline(
     else:
         print("⚠️ Not enough player samples found for team clustering. Using default colors.")
 
-    # 3. Setup Video Output Writer
+    # 3. Setup Video Output Writer (PyAV H.264)
     output_video_path = os.path.join(output_dir, "analyzed_match.mp4")
     writer = create_video_writer(
         output_video_path,
@@ -89,8 +92,12 @@ def run_pipeline(
         video_info["height"]
     )
 
+    # Motion Trails Buffers
+    player_trails = defaultdict(lambda: deque(maxlen=player_trail_len))
+    ball_trail = deque(maxlen=ball_trail_len)
+
     # 4. Step 2: Main Processing Loop
-    print("\n🚀 Processing video frames (Tracking, Classification, Spatial Accumulation)...")
+    print("\n🚀 Processing video frames (Tracking, Classification, Motion Trails)...")
     first_frame_saved = None
 
     pbar = tqdm(total=frames_to_process, desc="Analyzing Match")
@@ -106,7 +113,8 @@ def run_pipeline(
         # Detection & Persistent Multi-Object Tracking
         detection = detector.detect_and_track(frame, persist=True)
 
-        # Process and draw players
+        # Update Player Positions & Trails
+        current_frame_players = []
         for player in detection.players:
             bbox = player.bbox
             t_id = player.tracker_id
@@ -118,20 +126,41 @@ def run_pipeline(
                 if color is not None:
                     team_id = team_assigner.predict_team(color)
 
-            # Record spatial coordinates
+            # Record spatial coordinates and trail
             if t_id is not None:
                 spatial_analytics.add_position(t_id, bbox, team_id)
+                bottom_center = ((bbox[0] + bbox[2]) / 2.0, bbox[3])
+                player_trails[t_id].append(bottom_center)
 
-            # Draw tactical foot ellipse & ID
+            current_frame_players.append((player, team_id))
+
+        # Update Ball Positions & Trail
+        for ball in detection.balls:
+            ball_center = ((ball.bbox[0] + ball.bbox[2]) / 2.0, (ball.bbox[1] + ball.bbox[3]) / 2.0)
+            ball_trail.append(ball_center)
+
+        # Draw Layers:
+        # Layer 1: Player motion trails (underneath ellipses)
+        TacticalVisualizer.draw_player_trails(
+            annotated_frame,
+            player_trails,
+            spatial_analytics.player_teams
+        )
+
+        # Layer 2: Ball motion trail (White line)
+        TacticalVisualizer.draw_ball_trail(annotated_frame, ball_trail)
+
+        # Layer 3: Tactical foot ellipses and ID tags
+        for player, team_id in current_frame_players:
             tactical_color = TacticalVisualizer.TEAM_COLORS.get(team_id, (200, 200, 200))
             TacticalVisualizer.draw_player_ellipse(
                 annotated_frame,
-                bbox,
+                player.bbox,
                 tactical_color,
-                tracker_id=t_id
+                tracker_id=player.tracker_id
             )
 
-        # Draw ball pointer
+        # Layer 4: Ball tracker pointer
         for ball in detection.balls:
             TacticalVisualizer.draw_ball_pointer(annotated_frame, ball.bbox)
 
@@ -139,8 +168,8 @@ def run_pipeline(
         writer.write(annotated_frame)
         pbar.update(1)
 
-        if progress_callback and f_idx % 5 == 0:
-            progress_callback(f_idx + 1, frames_to_process, f"Tracking players... Frame {f_idx + 1}/{frames_to_process}")
+        if progress_callback and f_idx % 10 == 0:
+            progress_callback(f_idx + 1, frames_to_process, f"Tracking Match Action... Frame {f_idx + 1}/{frames_to_process}")
 
     pbar.close()
     writer.release()
@@ -193,7 +222,7 @@ def run_pipeline(
     print(f"📍 Average positions saved to: {formation_path}")
     print(f"\n✅ Total unique players tracked: {len(avg_positions)}")
     print("=" * 60)
-    print("🎉 Phase 1 Pipeline Completed Successfully!")
+    print("🎉 Pipeline Completed Successfully!")
     print("=" * 60)
 
     return {
@@ -214,8 +243,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Footballistic Match Analytics")
     parser.add_argument("--video", type=str, default="data/sample_videos/sample.mp4", help="Path to input video")
     parser.add_argument("--output", type=str, default="output", help="Output directory")
-    parser.add_argument("--frames", type=int, default=150, help="Max frames to process (0 for all)")
+    parser.add_argument("--frames", type=int, default=0, help="Max frames to process (0 for all)")
+    parser.add_argument("--model", type=str, default="weights/yolo11m.pt", help="YOLO model path")
     parser.add_argument("--conf", type=float, default=0.35, help="Detection confidence")
     args = parser.parse_args()
 
-    run_pipeline(video_path=args.video, output_dir=args.output, max_frames=args.frames, confidence=args.conf)
+    run_pipeline(video_path=args.video, output_dir=args.output, max_frames=args.frames, model_name=args.model, confidence=args.conf)

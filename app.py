@@ -4,6 +4,7 @@ Footballistic: Streamlit Interactive Football Match Analytics Dashboard.
 
 import os
 import tempfile
+from typing import Optional
 import cv2
 import pandas as pd
 import streamlit as st
@@ -100,15 +101,28 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Analysis Parameters")
-    
-    max_frames = st.slider(
-        "Frames to Analyze (1 sec ≈ 25 frames):",
-        min_value=25,
-        max_value=500,
-        value=75,
-        step=25,
-        help="Higher frame counts yield longer tracking but take more processing time."
+
+    model_choice = st.selectbox(
+        "Detection Model:",
+        ["YOLO11 (Latest Flagship - Recommended)", "YOLOv8 (Classic)"],
+        index=0,
+        help="YOLO11 offers higher accuracy and faster inference with fewer parameters."
     )
+    selected_model_path = "weights/yolo11m.pt" if "YOLO11" in model_choice else "weights/yolov8m.pt"
+
+    analyze_full = st.checkbox("Analyze Full Video (All Frames / 30 seconds)", value=True)
+    
+    if not analyze_full:
+        max_frames = st.slider(
+            "Frames to Analyze (1 sec ≈ 25 frames):",
+            min_value=25,
+            max_value=750,
+            value=150,
+            step=25,
+            help="Higher frame counts yield longer tracking but take more processing time."
+        )
+    else:
+        max_frames = 0  # 0 indicates full video in main.py
 
     conf_thresh = st.slider(
         "Detection Confidence:",
@@ -140,6 +154,7 @@ if analyze_btn:
                     video_path=input_video_path,
                     output_dir="output",
                     max_frames=max_frames,
+                    model_name=selected_model_path,
                     confidence=conf_thresh,
                     progress_callback=update_progress
                 )
@@ -214,11 +229,11 @@ if results is not None:
         c_left, c_right = st.columns(2)
         with c_left:
             st.markdown("#### 🏟️ Pitch Heatmap Overlay")
-            st.image(results["overlay_path"], caption="Cumulative Team Heatmaps Blended on Pitch", use_column_width=True)
+            st.image(results["overlay_path"], caption="Cumulative Team Heatmaps Blended on Pitch", use_container_width=True)
             
         with c_right:
             st.markdown("#### 📍 Average Formations & Tactical Shape")
-            st.image(results["formation_path"], caption="Player Average Position Coordinates & Team Clusters", use_column_width=True)
+            st.image(results["formation_path"], caption="Player Average Position Coordinates & Team Clusters", use_container_width=True)
 
         st.markdown("---")
         st.markdown("#### 🆚 Team-by-Team Heatmap Comparison")
@@ -226,11 +241,11 @@ if results is not None:
         with t_col1:
             st.markdown("##### 🔴 Team 0 Density")
             if os.path.exists(results["team0_heatmap_path"]):
-                st.image(results["team0_heatmap_path"], caption="Team 0 Heatmap", use_column_width=True)
+                st.image(results["team0_heatmap_path"], caption="Team 0 Heatmap", use_container_width=True)
         with t_col2:
             st.markdown("##### 🟢 Team 1 Density")
             if os.path.exists(results["team1_heatmap_path"]):
-                st.image(results["team1_heatmap_path"], caption="Team 1 Heatmap", use_column_width=True)
+                st.image(results["team1_heatmap_path"], caption="Team 1 Heatmap", use_container_width=True)
 
     # TAB 3: PLAYER DEEP-DIVE
     with tab_player:
@@ -278,7 +293,7 @@ if results is not None:
                     st.image(
                         cv2.cvtColor(player_heatmap_img, cv2.COLOR_BGR2RGB),
                         caption=f"Heatmap & Avg Position for Player #{selected_pid}",
-                        use_column_width=True
+                        use_container_width=True
                     )
 
                 with p_col2:
@@ -290,7 +305,7 @@ if results is not None:
                     st.image(
                         cv2.cvtColor(player_trail_img, cv2.COLOR_BGR2RGB),
                         caption=f"Movement Path: Green = Start, Red = Current",
-                        use_column_width=True
+                        use_container_width=True
                     )
             else:
                 st.info("No tracked players found in current run.")
@@ -319,3 +334,4 @@ if results is not None:
             st.info("Run an analysis from the sidebar to generate the spatial player dataset.")
 else:
     st.info("👈 Select a video from the sidebar and click **'Run Match Analysis'** to start!")
+
