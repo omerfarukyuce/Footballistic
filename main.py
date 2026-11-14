@@ -1,10 +1,11 @@
 """
 Footballistic: Main Pipeline Entrypoint.
-Processes match footage, tracks players and the ball, classifies teams,
-draws live motion trails, and generates spatial heatmaps & average formations.
+Processes match footage with YOLO11, pitch boundary segmentation,
+smooth player & ball tracking trails, and 2D top-down pitch analytics.
 """
 
 from collections import defaultdict, deque
+import math
 import os
 import argparse
 from typing import Callable, Dict, Optional
@@ -13,8 +14,10 @@ import numpy as np
 from tqdm import tqdm
 
 from src.detection.detector import FootballDetector
+from src.detection.pitch_detector import PitchDetector
 from src.team_assignment.color_assigner import TeamColorAssigner
 from src.analysis.heatmap import SpatialAnalytics
+from src.homography.pitch_view import PitchView2D
 from src.utils.video_utils import VideoHandler, create_video_writer
 from src.utils.drawing import TacticalVisualizer
 
@@ -25,11 +28,11 @@ os.environ["YOLO_CONFIG_DIR"] = os.path.abspath(".ultralytics")
 def run_pipeline(
     video_path: str = "data/sample_videos/sample.mp4",
     output_dir: str = "output",
-    max_frames: int = 0,  # 0 for full video (all 750 frames / 30 seconds)
+    max_frames: int = 0,  # 0 for full video
     model_name: str = "weights/yolo11m.pt",
     confidence: float = 0.35,
-    player_trail_len: int = 15,  # Recent frames trail for players
-    ball_trail_len: int = 40,    # Longer trail for the ball (passes & flight paths)
+    player_trail_len: int = 15,
+    ball_trail_len: int = 35,
     progress_callback: Optional[Callable[[int, int, str], None]] = None
 ) -> Dict:
     """
@@ -49,12 +52,14 @@ def run_pipeline(
     print(f"⏱️  Frames to analyze: {frames_to_process} ({frames_to_process / video_info['fps']:.1f}s)")
 
     if progress_callback:
-        progress_callback(0, frames_to_process, "Initializing YOLO11 & Vision Modules...")
+        progress_callback(0, frames_to_process, "Initializing YOLO11 & Pitch Modules...")
 
     # 1. Initialize modules
     print(f"\n🧠 Initializing Detector ({model_name})...")
     detector = FootballDetector(model_path=model_name, confidence=confidence)
+    pitch_detector = PitchDetector()
     team_assigner = TeamColorAssigner()
+    pitch_view = PitchView2D(pitch_width=1050, pitch_height=680)
     spatial_analytics = SpatialAnalytics(video_info["width"], video_info["height"])
     spatial_analytics.set_total_frames(frames_to_process)
 
@@ -64,15 +69,22 @@ def run_pipeline(
         progress_callback(0, frames_to_process, "Calibrating Team Colors...")
         
     sampled_colors = []
-    sample_stride = 5
+    sample_stride = 4
     for f_idx, frame in video.frame_generator():
-        if f_idx >= 30:  # Sample within the first 30 frames
+        if f_idx >= 60:
             break
         if f_idx % sample_stride != 0:
             continue
         
+        # Segment pitch
+        pitch_detector.get_pitch_mask(frame)
         detection = detector.detect_and_track(frame, persist=False)
         for player in detection.players:
+            # Check if player feet are on the playable pitch
+            foot_pos = ((player.bbox[0] + player.bbox[2]) / 2.0, player.bbox[3])
+            if not pitch_detector.is_inside_pitch(foot_pos):
+                continue
+
             color = team_assigner.extract_jersey_color(frame, player.bbox)
             if color is not None:
                 sampled_colors.append(color)
@@ -92,9 +104,11 @@ def run_pipeline(
         video_info["height"]
     )
 
-    # Motion Trails Buffers
+    # Motion Trails Buffers & Stable Team Voting
     player_trails = defaultdict(lambda: deque(maxlen=player_trail_len))
+    player_team_votes = defaultdict(lambda: defaultdict(int))
     ball_trail = deque(maxlen=ball_trail_len)
+    last_valid_ball_pos: Optional[Tuple[float, float]] = None
 
     # 4. Step 2: Main Processing Loop
     print("\n🚀 Processing video frames (Tracking, Classification, Motion Trails)...")
@@ -109,45 +123,110 @@ def run_pipeline(
             first_frame_saved = frame.copy()
 
         annotated_frame = frame.copy()
+
+        # Update pitch boundary mask
+        pitch_detector.get_pitch_mask(frame)
         
         # Detection & Persistent Multi-Object Tracking
         detection = detector.detect_and_track(frame, persist=True)
 
-        # Update Player Positions & Trails
+        # ----------------- PLAYERS -----------------
         current_frame_players = []
+        active_ids = set()
+
         for player in detection.players:
             bbox = player.bbox
             t_id = player.tracker_id
+            bottom_center = ((bbox[0] + bbox[2]) / 2.0, bbox[3])
 
-            # Determine Team
+            # Filter out people in the stands / bench / outside pitch
+            if not pitch_detector.is_inside_pitch(bottom_center):
+                continue
+
+            # Stable Team Assignment with Temporal Majority Voting
             team_id = 0
             if team_assigner.team_kmeans is not None:
                 color = team_assigner.extract_jersey_color(frame, bbox)
                 if color is not None:
-                    team_id = team_assigner.predict_team(color)
+                    pred_team = team_assigner.predict_team(color)
+                    if t_id is not None:
+                        player_team_votes[t_id][pred_team] += 1
+                        team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
+                    else:
+                        team_id = pred_team
+            elif t_id is not None and t_id in player_team_votes and player_team_votes[t_id]:
+                team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
+
+            # Map to 2D Top-Down Pitch
+            pos_2d = pitch_view.map_camera_to_2d(
+                bottom_center[0], bottom_center[1],
+                cam_w=video_info["width"], cam_h=video_info["height"]
+            )
 
             # Record spatial coordinates and trail
             if t_id is not None:
-                spatial_analytics.add_position(t_id, bbox, team_id)
-                bottom_center = ((bbox[0] + bbox[2]) / 2.0, bbox[3])
+                spatial_analytics.add_position(t_id, bbox, team_id, pos_2d=pos_2d)
+                active_ids.add(t_id)
+
+                # Check jump distance to prevent line glitches
+                if len(player_trails[t_id]) > 0:
+                    prev_p = player_trails[t_id][-1]
+                    dist = math.hypot(bottom_center[0] - prev_p[0], bottom_center[1] - prev_p[1])
+                    if dist > 80.0:  # Player teleport / tracker ID swap glitch
+                        player_trails[t_id].clear()
+
                 player_trails[t_id].append(bottom_center)
 
             current_frame_players.append((player, team_id))
 
-        # Update Ball Positions & Trail
-        for ball in detection.balls:
-            ball_center = ((ball.bbox[0] + ball.bbox[2]) / 2.0, (ball.bbox[1] + ball.bbox[3]) / 2.0)
-            ball_trail.append(ball_center)
+        # ----------------- BALL -----------------
+        # Filter ball candidates: must be inside pitch, reasonable size, aspect ratio
+        valid_balls = pitch_detector.filter_ball_candidates(detection.balls)
+        best_ball = None
 
-        # Draw Layers:
-        # Layer 1: Player motion trails (underneath ellipses)
+        if valid_balls:
+            if last_valid_ball_pos is not None:
+                # Find candidate closest to previous known ball position
+                def ball_dist(b):
+                    cx = (b.bbox[0] + b.bbox[2]) / 2.0
+                    cy = (b.bbox[1] + b.bbox[3]) / 2.0
+                    return math.hypot(cx - last_valid_ball_pos[0], cy - last_valid_ball_pos[1])
+
+                sorted_by_dist = sorted(valid_balls, key=ball_dist)
+                closest = sorted_by_dist[0]
+                d = ball_dist(closest)
+                # If within plausible physical jump limit (150px)
+                if d < 160.0:
+                    best_ball = closest
+                else:
+                    # Best confidence candidate
+                    best_ball = max(valid_balls, key=lambda b: b.confidence)
+                    ball_trail.clear()  # Reset trail on large jump
+            else:
+                best_ball = max(valid_balls, key=lambda b: b.confidence)
+
+        if best_ball is not None:
+            ball_center = ((best_ball.bbox[0] + best_ball.bbox[2]) / 2.0, (best_ball.bbox[1] + best_ball.bbox[3]) / 2.0)
+            
+            # Check jump from previous point
+            if len(ball_trail) > 0:
+                dist = math.hypot(ball_center[0] - ball_trail[-1][0], ball_center[1] - ball_trail[-1][1])
+                if dist > 140.0:
+                    ball_trail.clear()
+
+            ball_trail.append(ball_center)
+            last_valid_ball_pos = ball_center
+
+        # ----------------- DRAW LAYERS -----------------
+        # Layer 1: Player motion trails (ONLY active players, team colored)
         TacticalVisualizer.draw_player_trails(
             annotated_frame,
             player_trails,
-            spatial_analytics.player_teams
+            spatial_analytics.player_teams,
+            active_ids=active_ids
         )
 
-        # Layer 2: Ball motion trail (White line)
+        # Layer 2: Ball motion trail (Pure WHITE line)
         TacticalVisualizer.draw_ball_trail(annotated_frame, ball_trail)
 
         # Layer 3: Tactical foot ellipses and ID tags
@@ -161,8 +240,8 @@ def run_pipeline(
             )
 
         # Layer 4: Ball tracker pointer
-        for ball in detection.balls:
-            TacticalVisualizer.draw_ball_pointer(annotated_frame, ball.bbox)
+        if best_ball is not None:
+            TacticalVisualizer.draw_ball_pointer(annotated_frame, best_ball.bbox)
 
         # Write frame
         writer.write(annotated_frame)
@@ -175,22 +254,20 @@ def run_pipeline(
     writer.release()
     print(f"\n🎥 Analyzed video saved to: {output_video_path}")
 
-    # 5. Step 3: Spatial Post-Processing (Heatmaps & Formations)
-    print("\n🗺️ Generating Heatmaps & Average Formations...")
+    # 5. Step 3: Spatial Post-Processing (Camera Heatmaps & Formations)
+    print("\n🗺️ Generating Heatmaps & Formations (Camera & 2D Top-Down)...")
     if progress_callback:
-        progress_callback(frames_to_process, frames_to_process, "Generating Heatmaps and Tactical Formations...")
+        progress_callback(frames_to_process, frames_to_process, "Generating 2D Top-Down Pitch Analytics...")
     
-    # Team 0 Heatmap
+    # Camera Perspective Heatmaps
     team0_heatmap = spatial_analytics.generate_heatmap(team_id=0)
     team0_path = os.path.join(output_dir, "heatmap_team_0.png")
     cv2.imwrite(team0_path, team0_heatmap)
 
-    # Team 1 Heatmap
     team1_heatmap = spatial_analytics.generate_heatmap(team_id=1)
     team1_path = os.path.join(output_dir, "heatmap_team_1.png")
     cv2.imwrite(team1_path, team1_heatmap)
 
-    # Overlay Heatmap onto first frame for tactical context
     overlay_path = os.path.join(output_dir, "heatmap_pitch_overlay.png")
     if first_frame_saved is not None:
         combined_overlay = first_frame_saved.copy()
@@ -203,7 +280,7 @@ def run_pipeline(
         )
         cv2.imwrite(overlay_path, combined_overlay)
 
-    # Average Formations
+    # Camera Perspective Average Formations
     formation_path = os.path.join(output_dir, "average_positions.png")
     avg_positions = spatial_analytics.get_average_positions()
     if first_frame_saved is not None:
@@ -218,9 +295,33 @@ def run_pipeline(
     if first_frame_saved is not None:
         cv2.imwrite(first_frame_path, first_frame_saved)
 
-    print(f"📊 Heatmaps saved to: {team0_path} & {team1_path}")
-    print(f"📍 Average positions saved to: {formation_path}")
-    print(f"\n✅ Total unique players tracked: {len(avg_positions)}")
+    # ----------------- 2D TOP-DOWN RECTANGULAR PITCH ARTIFACTS -----------------
+    # 2D Average Formations
+    avg_positions_2d = spatial_analytics.get_average_positions_2d()
+    pitch_2d_formation_img = pitch_view.draw_2d_formations(avg_positions_2d, spatial_analytics.player_teams)
+    pitch_2d_formation_path = os.path.join(output_dir, "pitch_2d_formation.png")
+    cv2.imwrite(pitch_2d_formation_path, pitch_2d_formation_img)
+
+    # 2D Team 0 Heatmap
+    team0_pts_2d = spatial_analytics.get_2d_positions(team_id=0)
+    pitch_2d_team0_img = pitch_view.generate_2d_heatmap(team0_pts_2d)
+    pitch_2d_team0_path = os.path.join(output_dir, "pitch_2d_heatmap_team0.png")
+    cv2.imwrite(pitch_2d_team0_path, pitch_2d_team0_img)
+
+    # 2D Team 1 Heatmap
+    team1_pts_2d = spatial_analytics.get_2d_positions(team_id=1)
+    pitch_2d_team1_img = pitch_view.generate_2d_heatmap(team1_pts_2d)
+    pitch_2d_team1_path = os.path.join(output_dir, "pitch_2d_heatmap_team1.png")
+    cv2.imwrite(pitch_2d_team1_path, pitch_2d_team1_img)
+
+    # 2D Combined Heatmap
+    all_pts_2d = spatial_analytics.get_2d_positions()
+    pitch_2d_all_img = pitch_view.generate_2d_heatmap(all_pts_2d)
+    pitch_2d_all_path = os.path.join(output_dir, "pitch_2d_heatmap_all.png")
+    cv2.imwrite(pitch_2d_all_path, pitch_2d_all_img)
+
+    print(f"📊 2D Rectangular Heatmaps & Formations saved to {output_dir}")
+    print(f"✅ Total unique players tracked: {len(avg_positions)}")
     print("=" * 60)
     print("🎉 Pipeline Completed Successfully!")
     print("=" * 60)
@@ -228,12 +329,17 @@ def run_pipeline(
     return {
         "output_video_path": output_video_path,
         "spatial_analytics": spatial_analytics,
+        "pitch_view": pitch_view,
         "first_frame": first_frame_saved,
         "first_frame_path": first_frame_path,
         "team0_heatmap_path": team0_path,
         "team1_heatmap_path": team1_path,
         "overlay_path": overlay_path,
         "formation_path": formation_path,
+        "pitch_2d_formation_path": pitch_2d_formation_path,
+        "pitch_2d_team0_path": pitch_2d_team0_path,
+        "pitch_2d_team1_path": pitch_2d_team1_path,
+        "pitch_2d_all_path": pitch_2d_all_path,
         "video_info": video_info,
         "total_players": len(avg_positions)
     }

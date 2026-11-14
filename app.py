@@ -1,5 +1,7 @@
 """
 Footballistic: Streamlit Interactive Football Match Analytics Dashboard.
+Features 2D Top-Down Rectangular Pitch Analytics, Live Motion Trails,
+and Individual Player Deep-Dives.
 """
 
 import os
@@ -12,6 +14,7 @@ import numpy as np
 
 from main import run_pipeline
 from src.analysis.heatmap import SpatialAnalytics
+from src.homography.pitch_view import PitchView2D
 
 # Configure Streamlit Page
 st.set_page_config(
@@ -35,13 +38,6 @@ st.markdown("""
         color: #9E9E9E;
         margin-bottom: 1.5rem;
     }
-    .metric-card {
-        background-color: #1E222A;
-        border-radius: 8px;
-        padding: 15px;
-        border-left: 4px solid #1E88E5;
-        margin-bottom: 15px;
-    }
     .stTabs [data-baseweb="tab-list"] {
         gap: 20px;
     }
@@ -58,8 +54,6 @@ st.markdown("""
 def init_session():
     if "results" not in st.session_state:
         st.session_state["results"] = None
-    if "is_analyzing" not in st.session_state:
-        st.session_state["is_analyzing"] = False
 
 
 init_session()
@@ -84,7 +78,7 @@ with st.sidebar:
     if video_source == "Sample Match Clip (DFL Bundesliga)":
         if os.path.exists(sample_clip_path):
             input_video_path = sample_clip_path
-            st.success(f"Loaded demo clip: `sample.mp4` (1080p, 25 FPS)")
+            st.success("Loaded demo clip: `sample.mp4` (1080p, 25 FPS)")
         else:
             st.warning("Sample clip not found locally. Please upload a video.")
     else:
@@ -93,7 +87,6 @@ with st.sidebar:
             type=["mp4", "avi", "mov"]
         )
         if uploaded_file is not None:
-            # Save uploaded video to temporary file
             tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
             tfile.write(uploaded_file.read())
             input_video_path = tfile.name
@@ -149,7 +142,7 @@ if analyze_btn:
             status_text.info(f"⏳ **{msg}** ({int(pct * 100)}%)")
 
         try:
-            with st.spinner("Processing match video with YOLOv8 & ByteTrack..."):
+            with st.spinner("Processing match video with YOLO11, pitch segmentation & motion tracking..."):
                 results = run_pipeline(
                     video_path=input_video_path,
                     output_dir="output",
@@ -169,19 +162,22 @@ if analyze_btn:
 results = st.session_state["results"]
 
 if results is None:
-    # If existing output files exist on disk from previous runs, load them as initial preview!
+    # If existing output files exist on disk from previous runs, load them
     existing_video = "output/analyzed_match.mp4"
-    if os.path.exists(existing_video) and os.path.exists("output/heatmap_pitch_overlay.png"):
-        st.info("💡 Previous analysis found on disk! Run a new analysis from the sidebar anytime or explore the saved session below.")
-        # Minimal mock results for initial view
+    if os.path.exists(existing_video):
+        st.info("💡 Previous analysis found on disk! Run a new analysis anytime from the sidebar or explore the session below.")
         results = {
             "output_video_path": existing_video,
             "team0_heatmap_path": "output/heatmap_team_0.png",
             "team1_heatmap_path": "output/heatmap_team_1.png",
             "overlay_path": "output/heatmap_pitch_overlay.png",
             "formation_path": "output/average_positions.png",
+            "pitch_2d_formation_path": "output/pitch_2d_formation.png",
+            "pitch_2d_team0_path": "output/pitch_2d_heatmap_team0.png",
+            "pitch_2d_team1_path": "output/pitch_2d_heatmap_team1.png",
+            "pitch_2d_all_path": "output/pitch_2d_heatmap_all.png",
             "first_frame_path": "output/first_frame.png",
-            "total_players": 43,
+            "total_players": 46,
             "video_info": {"width": 1920, "height": 1080, "fps": 25.0, "total_frames": 750}
         }
         st.session_state["results"] = results
@@ -197,7 +193,7 @@ if results is not None:
     with col3:
         st.metric("Frame Rate", f"{v_info.get('fps', 25.0)} FPS")
     with col4:
-        st.metric("Active Teams", "2 Teams + Ref")
+        st.metric("Pitch Tracking", "Active (Green Masked)")
 
     # Tabs
     tab_video, tab_heatmaps, tab_player, tab_data = st.tabs([
@@ -209,9 +205,9 @@ if results is not None:
 
     # TAB 1: VIDEO REPLAY
     with tab_video:
-        st.subheader("Annotated Match Video")
+        st.subheader("Annotated Match Video with Dynamic Trails")
         st.markdown(
-            "Every detected player is tracked with a continuous ID, tactical foot ellipse, and team color. The ball is marked with an inverted tracker pointer."
+            "🔴 **Team 0:** Red Trails | 🔵 **Team 1:** Royal Blue Trails | ⚪ **Ball:** White Flight Trajectory | 🟨 **Referee:** Yellow"
         )
         
         video_path = results.get("output_video_path")
@@ -224,39 +220,79 @@ if results is not None:
 
     # TAB 2: TEAM HEATMAPS & FORMATIONS
     with tab_heatmaps:
-        st.subheader("Pitch Spatial Density & Tactical Formations")
-        
-        c_left, c_right = st.columns(2)
-        with c_left:
-            st.markdown("#### 🏟️ Pitch Heatmap Overlay")
-            st.image(results["overlay_path"], caption="Cumulative Team Heatmaps Blended on Pitch", use_container_width=True)
-            
-        with c_right:
-            st.markdown("#### 📍 Average Formations & Tactical Shape")
-            st.image(results["formation_path"], caption="Player Average Position Coordinates & Team Clusters", use_container_width=True)
+        st.subheader("Tactical Pitch Spatial Density & Average Formations")
 
-        st.markdown("---")
-        st.markdown("#### 🆚 Team-by-Team Heatmap Comparison")
-        t_col1, t_col2 = st.columns(2)
-        with t_col1:
-            st.markdown("##### 🔴 Team 0 Density")
-            if os.path.exists(results["team0_heatmap_path"]):
-                st.image(results["team0_heatmap_path"], caption="Team 0 Heatmap", use_container_width=True)
-        with t_col2:
-            st.markdown("##### 🟢 Team 1 Density")
-            if os.path.exists(results["team1_heatmap_path"]):
-                st.image(results["team1_heatmap_path"], caption="Team 1 Heatmap", use_container_width=True)
+        view_type = st.radio(
+            "Choose Display Perspective:",
+            ["📐 2D Top-Down Rectangular Pitch (Kuşbakışı - Önerilen)", "🏟️ Camera Perspective Overlay"],
+            horizontal=True
+        )
+
+        if "2D Top-Down" in view_type:
+            c_left, c_right = st.columns(2)
+            with c_left:
+                st.markdown("#### 📍 2D Top-Down Average Formations")
+                if os.path.exists(results.get("pitch_2d_formation_path", "")):
+                    st.image(results["pitch_2d_formation_path"], caption="2D Tactical Pitch: Red = Team 0, Blue = Team 1", use_column_width=True)
+                else:
+                    st.info("Run analysis to generate 2D pitch formations.")
+
+            with c_right:
+                st.markdown("#### 🔥 2D Cumulative Match Heatmap")
+                if os.path.exists(results.get("pitch_2d_all_path", "")):
+                    st.image(results["pitch_2d_all_path"], caption="2D Top-Down Spatial Heatmap on Standard Pitch", use_column_width=True)
+                else:
+                    st.info("Run analysis to generate 2D pitch heatmap.")
+
+            st.markdown("---")
+            st.markdown("#### 🆚 2D Team-by-Team Heatmap Comparison")
+            t_col1, t_col2 = st.columns(2)
+            with t_col1:
+                st.markdown("##### 🔴 Team 0 (2D Pitch Density)")
+                if os.path.exists(results.get("pitch_2d_team0_path", "")):
+                    st.image(results["pitch_2d_team0_path"], caption="Team 0 2D Heatmap", use_column_width=True)
+            with t_col2:
+                st.markdown("##### 🔵 Team 1 (2D Pitch Density)")
+                if os.path.exists(results.get("pitch_2d_team1_path", "")):
+                    st.image(results["pitch_2d_team1_path"], caption="Team 1 2D Heatmap", use_column_width=True)
+        else:
+            c_left, c_right = st.columns(2)
+            with c_left:
+                st.markdown("#### 🏟️ Pitch Heatmap Overlay (Camera Perspective)")
+                if os.path.exists(results.get("overlay_path", "")):
+                    st.image(results["overlay_path"], caption="Cumulative Team Heatmaps Blended on Pitch", use_column_width=True)
+                
+            with c_right:
+                st.markdown("#### 📍 Average Formations & Tactical Shape")
+                if os.path.exists(results.get("formation_path", "")):
+                    st.image(results["formation_path"], caption="Player Average Positions on Camera Frame", use_column_width=True)
+
+            st.markdown("---")
+            st.markdown("#### 🆚 Team-by-Team Camera Heatmaps")
+            t_col1, t_col2 = st.columns(2)
+            with t_col1:
+                st.markdown("##### 🔴 Team 0 Density")
+                if os.path.exists(results.get("team0_heatmap_path", "")):
+                    st.image(results["team0_heatmap_path"], caption="Team 0 Camera Heatmap", use_column_width=True)
+            with t_col2:
+                st.markdown("##### 🔵 Team 1 Density")
+                if os.path.exists(results.get("team1_heatmap_path", "")):
+                    st.image(results["team1_heatmap_path"], caption="Team 1 Camera Heatmap", use_column_width=True)
 
     # TAB 3: PLAYER DEEP-DIVE
     with tab_player:
         st.subheader("Individual Player Spatial Intelligence")
         spatial_analytics: Optional[SpatialAnalytics] = results.get("spatial_analytics")
+        pitch_view: Optional[PitchView2D] = results.get("pitch_view")
         first_frame = results.get("first_frame")
 
         if first_frame is None and os.path.exists("output/first_frame.png"):
             first_frame = cv2.imread("output/first_frame.png")
 
-        if spatial_analytics is not None and first_frame is not None:
+        if pitch_view is None:
+            pitch_view = PitchView2D(1050, 680)
+
+        if spatial_analytics is not None:
             player_list = sorted(list(spatial_analytics.player_tracks.keys()))
             if player_list:
                 selected_pid = st.selectbox(
@@ -268,45 +304,74 @@ if results is not None:
                 # Player Metrics
                 team_id = spatial_analytics.player_teams.get(selected_pid, 0)
                 positions = spatial_analytics.player_tracks.get(selected_pid, [])
+                positions_2d = spatial_analytics.player_tracks_2d.get(selected_pid, [])
                 avg_pos = spatial_analytics.get_average_positions().get(selected_pid, (0, 0))
 
                 pm_col1, pm_col2, pm_col3, pm_col4 = st.columns(4)
                 with pm_col1:
-                    st.metric("Assigned Team", f"Team {team_id}")
+                    team_label = "🔴 Team 0" if team_id == 0 else "🔵 Team 1"
+                    st.metric("Assigned Team", team_label)
                 with pm_col2:
                     st.metric("Frames Tracked", f"{len(positions)} frames")
                 with pm_col3:
                     presence = round((len(positions) / max(1, spatial_analytics.total_processed_frames)) * 100, 1)
                     st.metric("Presence Rate", f"{presence}%")
                 with pm_col4:
-                    st.metric("Avg Position (X, Y)", f"{int(avg_pos[0])}, {int(avg_pos[1])}")
+                    st.metric("Avg Position (Camera X, Y)", f"{int(avg_pos[0])}, {int(avg_pos[1])}")
 
                 st.markdown("---")
+                p_view_choice = st.radio(
+                    "Player Display View:",
+                    ["📐 2D Top-Down Pitch View (Kuşbakışı)", "🏟️ Camera Perspective View"],
+                    horizontal=True,
+                    key="p_view_choice"
+                )
+
                 p_col1, p_col2 = st.columns(2)
                 
-                with p_col1:
-                    st.markdown(f"#### 🔥 Player #{selected_pid} Heatmap")
-                    player_heatmap_img = spatial_analytics.generate_player_overlay(
-                        tracker_id=selected_pid,
-                        background_frame=first_frame
-                    )
-                    st.image(
-                        cv2.cvtColor(player_heatmap_img, cv2.COLOR_BGR2RGB),
-                        caption=f"Heatmap & Avg Position for Player #{selected_pid}",
-                        use_container_width=True
-                    )
+                if "2D Top-Down" in p_view_choice:
+                    with p_col1:
+                        st.markdown(f"#### 🔥 Player #{selected_pid} 2D Heatmap")
+                        p_heatmap_2d = pitch_view.generate_2d_heatmap(positions_2d, sigma=22.0)
+                        st.image(
+                            cv2.cvtColor(p_heatmap_2d, cv2.COLOR_BGR2RGB),
+                            caption=f"2D Top-Down Heatmap for Player #{selected_pid}",
+                            use_column_width=True
+                        )
 
-                with p_col2:
-                    st.markdown(f"#### 🏃 Player #{selected_pid} Movement Trajectory")
-                    player_trail_img = spatial_analytics.generate_player_trajectory(
-                        tracker_id=selected_pid,
-                        background_frame=first_frame
-                    )
-                    st.image(
-                        cv2.cvtColor(player_trail_img, cv2.COLOR_BGR2RGB),
-                        caption=f"Movement Path: Green = Start, Red = Current",
-                        use_container_width=True
-                    )
+                    with p_col2:
+                        st.markdown(f"#### 🏃 Player #{selected_pid} 2D Movement Trail")
+                        p_trail_2d = pitch_view.draw_2d_player_trajectory(positions_2d, team_id=team_id)
+                        st.image(
+                            cv2.cvtColor(p_trail_2d, cv2.COLOR_BGR2RGB),
+                            caption=f"2D Movement Path: Green = Start, Red = End",
+                            use_column_width=True
+                        )
+                else:
+                    if first_frame is not None:
+                        with p_col1:
+                            st.markdown(f"#### 🔥 Player #{selected_pid} Camera Heatmap")
+                            player_heatmap_img = spatial_analytics.generate_player_overlay(
+                                tracker_id=selected_pid,
+                                background_frame=first_frame
+                            )
+                            st.image(
+                                cv2.cvtColor(player_heatmap_img, cv2.COLOR_BGR2RGB),
+                                caption=f"Heatmap & Avg Position for Player #{selected_pid}",
+                                use_column_width=True
+                            )
+
+                        with p_col2:
+                            st.markdown(f"#### 🏃 Player #{selected_pid} Movement Trajectory")
+                            player_trail_img = spatial_analytics.generate_player_trajectory(
+                                tracker_id=selected_pid,
+                                background_frame=first_frame
+                            )
+                            st.image(
+                                cv2.cvtColor(player_trail_img, cv2.COLOR_BGR2RGB),
+                                caption=f"Movement Path on Camera Frame",
+                                use_column_width=True
+                            )
             else:
                 st.info("No tracked players found in current run.")
         else:
@@ -334,4 +399,3 @@ if results is not None:
             st.info("Run an analysis from the sidebar to generate the spatial player dataset.")
 else:
     st.info("👈 Select a video from the sidebar and click **'Run Match Analysis'** to start!")
-
