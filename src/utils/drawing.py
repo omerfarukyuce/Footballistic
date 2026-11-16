@@ -1,11 +1,12 @@
 """
 Visualization and drawing utilities for tactical pitch analysis.
 Includes persistent tactical ellipses, ID badges, ball pointers,
-and dynamic motion trails for players and the ball.
+and clean, glitch-free motion trails for players and the ball.
 """
 
 from collections import deque
-from typing import Dict, List, Optional, Tuple
+import math
+from typing import Dict, List, Optional, Set, Tuple
 import cv2
 import numpy as np
 
@@ -13,11 +14,14 @@ import numpy as np
 class TacticalVisualizer:
     """Draws player foot ellipses, ID tags, ball markers, and motion trails."""
 
-    # Pre-defined team theme colors (BGR)
+    # High-contrast Team Colors (BGR format):
+    # Team 0: Vibrant Red
+    # Team 1: Vibrant Royal Blue
+    # Referee: Vibrant Yellow
     TEAM_COLORS = {
-        0: (50, 80, 230),     # Team 0 (Red / Orange-Red in BGR)
-        1: (40, 200, 50),     # Team 1 (Emerald Green in BGR)
-        -1: (30, 220, 240)    # Referee / Unknown (Yellow in BGR)
+        0: (35, 45, 235),     # Team 0: Red
+        1: (235, 130, 25),    # Team 1: Royal Blue
+        -1: (20, 220, 245)    # Referee / Official: Yellow
     }
 
     @staticmethod
@@ -56,7 +60,7 @@ class TacticalVisualizer:
                 frame,
                 (label_x - 3, label_y - text_h - 2),
                 (label_x + text_w + 3, label_y + baseline),
-                (20, 20, 20),
+                (15, 15, 15),
                 -1
             )
             cv2.putText(
@@ -90,50 +94,72 @@ class TacticalVisualizer:
     def draw_player_trails(
         frame: np.ndarray,
         player_trails: Dict[int, deque],
-        player_teams: Dict[int, int]
+        player_teams: Dict[int, int],
+        active_ids: Set[int],
+        max_jump_px: float = 70.0
     ):
         """
-        Draws dynamic movement trail for each player over the last several frames.
-        Color corresponds to the player's team.
+        Draws dynamic movement trails ONLY for currently active players.
+        Suppresses false jump lines (outliers) and dead ghost trails.
         """
-        for p_id, trail in player_trails.items():
-            if len(trail) < 2:
+        for p_id in active_ids:
+            trail = player_trails.get(p_id)
+            if not trail or len(trail) < 2:
                 continue
 
             team_id = player_teams.get(p_id, 0)
             color = TacticalVisualizer.TEAM_COLORS.get(team_id, (200, 200, 200))
             pts = list(trail)
 
-            # Draw lines with fading thickness for a comet/trail effect
             for i in range(1, len(pts)):
-                thickness = int(np.clip(2 * (i / len(pts)) + 1, 1, 3))
-                pt1 = (int(pts[i - 1][0]), int(pts[i - 1][1]))
-                pt2 = (int(pts[i][0]), int(pts[i][1]))
-                cv2.line(frame, pt1, pt2, (10, 10, 10), thickness + 2, cv2.LINE_AA)
-                cv2.line(frame, pt1, pt2, color, thickness, cv2.LINE_AA)
+                pt1 = pts[i - 1]
+                pt2 = pts[i]
+
+                # Outlier check: Do not connect jumps larger than max_jump_px
+                dist = math.hypot(pt2[0] - pt1[0], pt2[1] - pt1[1])
+                if dist > max_jump_px:
+                    continue
+
+                # Comet thickness effect (thinner at tail, thicker near feet)
+                thickness = int(np.clip(2.5 * (i / len(pts)) + 1, 1, 3))
+                p1 = (int(pt1[0]), int(pt1[1]))
+                p2 = (int(pt2[0]), int(pt2[1]))
+
+                # Subtle dark outline for high contrast
+                cv2.line(frame, p1, p2, (15, 15, 15), thickness + 2, cv2.LINE_AA)
+                cv2.line(frame, p1, p2, color, thickness, cv2.LINE_AA)
 
     @staticmethod
     def draw_ball_trail(
         frame: np.ndarray,
-        ball_trail: deque
+        ball_trail: deque,
+        max_jump_px: float = 140.0
     ):
         """
-        Draws dynamic movement trail for the ball over a longer history.
-        Line color is solid WHITE with a subtle dark border for high contrast.
+        Draws dynamic movement trail for the ball.
+        Line color is pure WHITE with black shadow border and outlier jump suppression.
         """
         if len(ball_trail) < 2:
             return
 
         pts = list(ball_trail)
         for i in range(1, len(pts)):
-            # Thickness gently grows from tail to head
-            thickness = int(np.clip(3 * (i / len(pts)) + 1, 2, 4))
-            pt1 = (int(pts[i - 1][0]), int(pts[i - 1][1]))
-            pt2 = (int(pts[i][0]), int(pts[i][1]))
-            # Black shadow border for visibility against green pitch
-            cv2.line(frame, pt1, pt2, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+            pt1 = pts[i - 1]
+            pt2 = pts[i]
+
+            # Outlier check: Do not connect teleporting ball jumps
+            dist = math.hypot(pt2[0] - pt1[0], pt2[1] - pt1[1])
+            if dist > max_jump_px:
+                continue
+
+            thickness = int(np.clip(3.0 * (i / len(pts)) + 1, 2, 4))
+            p1 = (int(pt1[0]), int(pt1[1]))
+            p2 = (int(pt2[0]), int(pt2[1]))
+
+            # Black contrast outline
+            cv2.line(frame, p1, p2, (10, 10, 10), thickness + 2, cv2.LINE_AA)
             # Pure white ball trajectory line
-            cv2.line(frame, pt1, pt2, (255, 255, 255), thickness, cv2.LINE_AA)
+            cv2.line(frame, p1, p2, (255, 255, 255), thickness, cv2.LINE_AA)
 
     @staticmethod
     def draw_average_positions(
@@ -141,9 +167,7 @@ class TacticalVisualizer:
         avg_positions: Dict[int, Tuple[float, float]],
         player_teams: Dict[int, int]
     ) -> np.ndarray:
-        """
-        Draws average player positions onto a frame/pitch.
-        """
+        """Draws average player positions on the camera background."""
         canvas = background_frame.copy()
         for p_id, (avg_x, avg_y) in avg_positions.items():
             team_id = player_teams.get(p_id, 0)
