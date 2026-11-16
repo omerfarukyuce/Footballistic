@@ -320,6 +320,10 @@ def run_pipeline(
     pitch_2d_all_path = os.path.join(output_dir, "pitch_2d_heatmap_all.png")
     cv2.imwrite(pitch_2d_all_path, pitch_2d_all_img)
 
+    # Save spatial dataset to JSON for instant dashboard reloading
+    spatial_data_path = os.path.join(output_dir, "spatial_data.json")
+    spatial_analytics.save_to_json(spatial_data_path)
+
     print(f"📊 2D Rectangular Heatmaps & Formations saved to {output_dir}")
     print(f"✅ Total unique players tracked: {len(avg_positions)}")
     print("=" * 60)
@@ -329,6 +333,7 @@ def run_pipeline(
     return {
         "output_video_path": output_video_path,
         "spatial_analytics": spatial_analytics,
+        "spatial_data_path": spatial_data_path,
         "pitch_view": pitch_view,
         "first_frame": first_frame_saved,
         "first_frame_path": first_frame_path,
