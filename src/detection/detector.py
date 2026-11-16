@@ -39,12 +39,14 @@ class FootballDetector:
         model_path: str = "weights/yolo11m.pt",
         confidence: float = 0.35,
         iou: float = 0.5,
-        device: Optional[str] = None
+        device: Optional[str] = None,
+        tracker_config: str = "configs/football_bytetrack.yaml"
     ):
         self.model = YOLO(model_path)
         self.confidence = confidence
         self.iou = iou
         self.device = device
+        self.tracker_config = tracker_config if os.path.exists(tracker_config) else "bytetrack.yaml"
 
     def detect_and_track(self, frame: np.ndarray, persist: bool = True) -> FrameDetection:
         """
@@ -56,7 +58,7 @@ class FootballDetector:
             persist=persist,
             conf=self.confidence,
             iou=self.iou,
-            tracker="bytetrack.yaml",
+            tracker=self.tracker_config,
             device=self.device,
             verbose=False
         )[0]

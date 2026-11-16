@@ -238,9 +238,10 @@ class PitchView2D:
         cv2.circle(canvas, (cx, cy), 13, primary_color, -1, cv2.LINE_AA)
 
         # Player ID label inside circle
-        label = str(tracker_id)
+        is_gk = tracker_id in (1, 13) or str(tracker_id) in ("1", "13")
+        label = "GK" if is_gk else str(tracker_id)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.45
+        font_scale = 0.40 if is_gk else 0.45
         (tw, th), _ = cv2.getTextSize(label, font, font_scale, 1)
         cv2.putText(
             canvas,
@@ -255,7 +256,7 @@ class PitchView2D:
 
         # Badge tag below player with meter coordinates
         xm, ym = self.pitch_to_meters(avg_pos_2d[0], avg_pos_2d[1])
-        tag_text = f"#{tracker_id} ({xm}m, {ym}m)"
+        tag_text = f"#{tracker_id} GK ({xm}m, {ym}m)" if is_gk else f"#{tracker_id} ({xm}m, {ym}m)"
         tag_font_scale = 0.40
         (tag_w, tag_h), _ = cv2.getTextSize(tag_text, font, tag_font_scale, 1)
         tag_x = max(10, min(self.width - tag_w - 15, cx - tag_w // 2))
@@ -343,17 +344,22 @@ class PitchView2D:
         # 3. Draw each player
         for p_id, (px, py) in zip(team_pids, team_pts):
             center = (int(round(px)), int(round(py)))
+            is_gk = p_id in (1, 13) or str(p_id) in ("1", "13")
+            if is_gk:
+                # Golden keeper halo
+                cv2.circle(canvas, center, 18, (30, 215, 255), 2, cv2.LINE_AA)
             cv2.circle(canvas, center, 15, (15, 15, 15), 2, cv2.LINE_AA)
             cv2.circle(canvas, center, 13, color, -1, cv2.LINE_AA)
 
-            label = str(p_id)
-            (tw, th), _ = cv2.getTextSize(label, font, 0.42, 1)
+            label = "GK" if is_gk else str(p_id)
+            font_s = 0.38 if is_gk else 0.42
+            (tw, th), _ = cv2.getTextSize(label, font, font_s, 1)
             cv2.putText(
                 canvas,
                 label,
                 (center[0] - tw // 2, center[1] + th // 2),
                 font,
-                0.42,
+                font_s,
                 (255, 255, 255),
                 1,
                 cv2.LINE_AA
@@ -382,18 +388,23 @@ class PitchView2D:
             team_id = player_teams.get(p_id, 0)
             color = team_colors_bgr.get(team_id, (200, 200, 200))
             center = (int(round(px)), int(round(py)))
+            is_gk = p_id in (1, 13) or str(p_id) in ("1", "13")
 
+            if is_gk:
+                # Golden keeper halo
+                cv2.circle(canvas, center, 18, (30, 215, 255), 2, cv2.LINE_AA)
             cv2.circle(canvas, center, 15, (15, 15, 15), 2, cv2.LINE_AA)
             cv2.circle(canvas, center, 13, color, -1, cv2.LINE_AA)
 
-            label = str(p_id)
-            (tw, th), _ = cv2.getTextSize(label, font, 0.42, 1)
+            label = "GK" if is_gk else str(p_id)
+            font_s = 0.38 if is_gk else 0.42
+            (tw, th), _ = cv2.getTextSize(label, font, font_s, 1)
             cv2.putText(
                 canvas,
                 label,
                 (center[0] - tw // 2, center[1] + th // 2),
                 font,
-                0.42,
+                font_s,
                 (255, 255, 255),
                 1,
                 cv2.LINE_AA

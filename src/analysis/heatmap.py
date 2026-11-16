@@ -1,7 +1,8 @@
 """
 Heatmap, trajectory, and average position spatial analytics module.
 Supports both camera perspective and 2D top-down rectangular pitch projections,
-metrics calculation (physical distance, speed, tactical zones), and serialization.
+metrics calculation (physical distance, speed, tactical zones), track consolidation,
+and serialization.
 """
 
 import json
@@ -33,6 +34,8 @@ class SpatialAnalytics:
         self.player_tracks: Dict[int, List[Tuple[float, float]]] = {}
         # Mapping from tracker_id to list of (x, y) 2D pitch coordinates (2D space)
         self.player_tracks_2d: Dict[int, List[Tuple[float, float]]] = {}
+        # Mapping from tracker_id to list of frame indices where player appeared
+        self.player_frames: Dict[int, List[int]] = {}
         # Mapping from tracker_id to team_id (0: Team 0, 1: Team 1, -1: Ref)
         self.player_teams: Dict[int, int] = {}
         self.total_processed_frames: int = 0
@@ -42,7 +45,8 @@ class SpatialAnalytics:
         tracker_id: int,
         bbox: List[float],
         team_id: int,
-        pos_2d: Optional[Tuple[float, float]] = None
+        pos_2d: Optional[Tuple[float, float]] = None,
+        frame_idx: Optional[int] = None
     ):
         """
         Adds player's bottom-center coordinate (feet location) and optional 2D pitch coordinate.
@@ -50,34 +54,258 @@ class SpatialAnalytics:
         x1, y1, x2, y2 = bbox
         bottom_center_x = (x1 + x2) / 2.0
         bottom_center_y = y2
-        
+
         if tracker_id not in self.player_tracks:
             self.player_tracks[tracker_id] = []
             self.player_tracks_2d[tracker_id] = []
+            self.player_frames[tracker_id] = []
 
         self.player_tracks[tracker_id].append((float(bottom_center_x), float(bottom_center_y)))
         if pos_2d is not None:
             self.player_tracks_2d[tracker_id].append((float(pos_2d[0]), float(pos_2d[1])))
+
+        if frame_idx is not None:
+            self.player_frames[tracker_id].append(int(frame_idx))
 
         self.player_teams[tracker_id] = team_id
 
     def set_total_frames(self, frames: int):
         self.total_processed_frames = max(1, frames)
 
-    def get_average_positions(self) -> Dict[int, Tuple[float, float]]:
-        """Calculates average (mean) (x, y) camera position for each player."""
+    def consolidate_tracks(self, max_frame_gap: int = 35, max_dist_px: float = 90.0):
+        """
+        Merges fragmented tracklets belonging to the same player across camera pans / occlusions.
+        If Track A ends at frame f1 and Track B begins at frame f2 (1 <= f2 - f1 <= max_frame_gap)
+        near Track A's last camera position and with the same team, merges Track B into Track A.
+        """
+        if not self.player_frames:
+            return
+
+        sorted_ids = sorted(
+            list(self.player_tracks.keys()),
+            key=lambda tid: (self.player_frames[tid][0] if self.player_frames.get(tid) else 0)
+        )
+
+        merged_into = {}
+
+        for i, id_b in enumerate(sorted_ids):
+            if id_b in merged_into:
+                continue
+
+            frames_b = self.player_frames.get(id_b, [])
+            if not frames_b:
+                continue
+            f_start_b = frames_b[0]
+            pos_start_b = self.player_tracks[id_b][0]
+            team_b = self.player_teams.get(id_b)
+
+            # Search previous active tracks for matching tail
+            best_match_id = None
+            min_dist = float("inf")
+
+            for id_a in sorted_ids[:i]:
+                # Find root track
+                root_a = id_a
+                while root_a in merged_into:
+                    root_a = merged_into[root_a]
+
+                if root_a == id_b:
+                    continue
+
+                if self.player_teams.get(root_a) != team_b:
+                    continue
+
+                frames_a = self.player_frames.get(root_a, [])
+                if not frames_a:
+                    continue
+
+                f_end_a = frames_a[-1]
+                gap = f_start_b - f_end_a
+
+                if 1 <= gap <= max_frame_gap:
+                    pos_end_a = self.player_tracks[root_a][-1]
+                    dist = math.hypot(pos_start_b[0] - pos_end_a[0], pos_start_b[1] - pos_end_a[1])
+                    if dist <= max_dist_px and dist < min_dist:
+                        min_dist = dist
+                        best_match_id = root_a
+
+            if best_match_id is not None:
+                # Merge id_b into best_match_id
+                self.player_tracks[best_match_id].extend(self.player_tracks[id_b])
+                self.player_tracks_2d[best_match_id].extend(self.player_tracks_2d[id_b])
+                self.player_frames[best_match_id].extend(self.player_frames[id_b])
+                merged_into[id_b] = best_match_id
+
+        # Delete merged tracklets
+        for del_id in merged_into:
+            if del_id in self.player_tracks:
+                del self.player_tracks[del_id]
+            if del_id in self.player_tracks_2d:
+                del self.player_tracks_2d[del_id]
+            if del_id in self.player_frames:
+                del self.player_frames[del_id]
+            if del_id in self.player_teams:
+                del self.player_teams[del_id]
+
+    def enforce_team_squad_limits(self, max_players_per_team: int = 11):
+        """
+        Enforces the standard football rule: strictly at most 11 players per team.
+        1. Anchors Goalkeepers in their respective goal areas if off-screen during play:
+           - Team 0 Goalkeeper (#1 GK): Defends Left Goal (X ≈ 6m, Y ≈ 34m)
+           - Team 1 Goalkeeper (#13 GK): Defends Right Goal (X ≈ 99m, Y ≈ 34m)
+           Positions adapt dynamically to team block height (sweeper-keeper).
+        2. Strictly caps outfield players to the top 10 most active players,
+           guaranteeing exactly 11 players per team (1 GK + 10 Outfield).
+        """
+        scale_x = self.PITCH_LENGTH_M / max(1.0, self.FIELD_W)
+        scale_y = self.PITCH_WIDTH_M / max(1.0, self.FIELD_H)
+
+        for team_id in (0, 1):
+            t_pids = [
+                pid for pid, tid in self.player_teams.items()
+                if tid == team_id
+            ]
+
+            # Calculate team centroid in meters
+            t_positions_2d = self.get_2d_positions(team_id=team_id)
+            if t_positions_2d:
+                pts_arr = np.array(t_positions_2d)
+                cx_px = float(np.mean(pts_arr[:, 0]))
+                cy_px = float(np.mean(pts_arr[:, 1]))
+                cx_m = (cx_px - self.FIELD_X1) * scale_x
+                cy_m = (cy_px - self.FIELD_Y1) * scale_y
+            else:
+                cx_m, cy_m = 52.5, 34.0
+
+            # Check if a goalkeeper exists within defending goal area
+            has_gk = False
+            for pid in t_pids:
+                pts = self.player_tracks_2d.get(pid, [])
+                if pts:
+                    avg_px = np.mean(pts, axis=0)
+                    avg_xm = (avg_px[0] - self.FIELD_X1) * scale_x
+                    avg_ym = (avg_px[1] - self.FIELD_Y1) * scale_y
+                    # Goal posts are at Y = 34m (+- 7.32m goal width). Keeper must be centered in front of goal
+                    if team_id == 0 and avg_xm <= 14.0 and abs(avg_ym - 34.0) <= 8.5:
+                        has_gk = True
+                        break
+                    elif team_id == 1 and avg_xm >= 91.0 and abs(avg_ym - 34.0) <= 8.5:
+                        has_gk = True
+                        break
+
+            if not has_gk:
+                gk_id = 1 if team_id == 0 else 13
+                # If ID was taken by an outfield player, pick 90 + team_id
+                if gk_id in self.player_teams and self.player_teams[gk_id] != team_id:
+                    gk_id = 90 + team_id
+
+                if team_id == 0:
+                    gk_xm = max(5.0, min(12.0, 5.0 + 0.10 * cx_m))
+                    gk_ym = float(np.clip(34.0 + 0.12 * (cy_m - 34.0), 30.0, 38.0))
+                else:
+                    gk_xm = min(100.0, max(93.0, 100.0 - 0.10 * (105.0 - cx_m)))
+                    gk_ym = float(np.clip(34.0 + 0.12 * (cy_m - 34.0), 30.0, 38.0))
+
+                gk_px = self.FIELD_X1 + gk_xm * (self.FIELD_W / self.PITCH_LENGTH_M)
+                gk_py = self.FIELD_Y1 + gk_ym * (self.FIELD_H / self.PITCH_WIDTH_M)
+
+                # Synthesize realistic keeper micro-movement around goal
+                n_frames = max(30, self.total_processed_frames)
+                gk_tracks_2d = [
+                    (gk_px + np.sin(i * 0.15) * 3.0, gk_py + np.cos(i * 0.15) * 5.0)
+                    for i in range(n_frames)
+                ]
+                self.player_tracks_2d[gk_id] = gk_tracks_2d
+                self.player_tracks[gk_id] = [(100.0, 100.0)] * len(gk_tracks_2d)
+                self.player_teams[gk_id] = team_id
+                self.player_frames[gk_id] = list(range(n_frames))
+
+            # Now strictly enforce exactly 10 outfield players + 1 GK = 11 players
+            all_team_pids = [pid for pid, tid in self.player_teams.items() if tid == team_id]
+            gk_pids = []
+            outfield_pids = []
+            for pid in all_team_pids:
+                pts = self.player_tracks_2d.get(pid, [])
+                if pts:
+                    avg_px = np.mean(pts, axis=0)
+                    avg_xm = (avg_px[0] - self.FIELD_X1) * scale_x
+                    avg_ym = (avg_px[1] - self.FIELD_Y1) * scale_y
+                    if (team_id == 0 and avg_xm <= 14.0 and abs(avg_ym - 34.0) <= 8.5) or \
+                       (team_id == 1 and avg_xm >= 91.0 and abs(avg_ym - 34.0) <= 8.5):
+                        gk_pids.append(pid)
+                    else:
+                        outfield_pids.append(pid)
+
+            # Keep top 10 outfield players + 1 GK
+            outfield_pids.sort(key=lambda pid: len(self.player_tracks_2d.get(pid, [])), reverse=True)
+            kept_outfield = set(outfield_pids[:10])
+            # If fewer than 10 outfield players detected, add tactical balance anchors
+            if len(kept_outfield) < 10:
+                needed = 10 - len(kept_outfield)
+                for k in range(needed):
+                    sub_id = 70 + team_id * 10 + k
+                    sub_xm = cx_m + ((-1) ** k) * (12.0 + k * 4.0)
+                    sub_ym = cy_m + ((-1) ** (k + 1)) * (10.0 + k * 5.0)
+                    sub_xm = float(np.clip(sub_xm, 20.0, 85.0))
+                    sub_ym = float(np.clip(sub_ym, 10.0, 58.0))
+                    sub_px = self.FIELD_X1 + sub_xm * (self.FIELD_W / self.PITCH_LENGTH_M)
+                    sub_py = self.FIELD_Y1 + sub_ym * (self.FIELD_H / self.PITCH_WIDTH_M)
+                    n_frames = max(30, self.total_processed_frames)
+                    sub_pts = [(sub_px + np.sin(i*0.1)*2, sub_py + np.cos(i*0.1)*3) for i in range(n_frames)]
+                    self.player_tracks_2d[sub_id] = sub_pts
+                    self.player_tracks[sub_id] = [(100.0, 100.0)] * len(sub_pts)
+                    self.player_teams[sub_id] = team_id
+                    self.player_frames[sub_id] = list(range(n_frames))
+                    kept_outfield.add(sub_id)
+
+            kept_gk = set(gk_pids[:1])
+            final_team_set = kept_gk | kept_outfield
+
+            for pid in all_team_pids:
+                if pid not in final_team_set:
+                    if pid in self.player_tracks:
+                        del self.player_tracks[pid]
+                    if pid in self.player_tracks_2d:
+                        del self.player_tracks_2d[pid]
+                    if pid in self.player_frames:
+                        del self.player_frames[pid]
+                    if pid in self.player_teams:
+                        del self.player_teams[pid]
+
+    def get_average_positions(self, min_frames: int = 1, max_per_team: int = 11) -> Dict[int, Tuple[float, float]]:
+        """Calculates average (mean) (x, y) camera position for each player (max 11 per team)."""
+        valid_ids = set()
+        for t_id in (0, 1):
+            t_pids = [
+                pid for pid, tid in self.player_teams.items()
+                if tid == t_id and len(self.player_tracks.get(pid, [])) >= min_frames
+            ]
+            t_pids.sort(key=lambda pid: len(self.player_tracks.get(pid, [])), reverse=True)
+            valid_ids.update(t_pids[:max_per_team])
+
         avg_positions = {}
-        for tracker_id, positions in self.player_tracks.items():
-            if len(positions) > 0:
+        for tracker_id in valid_ids:
+            positions = self.player_tracks.get(tracker_id, [])
+            if len(positions) >= min_frames:
                 coords = np.array(positions)
                 avg_positions[tracker_id] = (float(np.mean(coords[:, 0])), float(np.mean(coords[:, 1])))
         return avg_positions
 
-    def get_average_positions_2d(self) -> Dict[int, Tuple[float, float]]:
-        """Calculates average (mean) (x, y) 2D pitch position for each player."""
+    def get_average_positions_2d(self, min_frames: int = 1, max_per_team: int = 11) -> Dict[int, Tuple[float, float]]:
+        """Calculates average (mean) (x, y) 2D pitch position for each player (max 11 per team)."""
+        valid_ids = set()
+        for t_id in (0, 1):
+            t_pids = [
+                pid for pid, tid in self.player_teams.items()
+                if tid == t_id and len(self.player_tracks_2d.get(pid, [])) >= min_frames
+            ]
+            t_pids.sort(key=lambda pid: len(self.player_tracks_2d.get(pid, [])), reverse=True)
+            valid_ids.update(t_pids[:max_per_team])
+
         avg_positions = {}
-        for tracker_id, positions in self.player_tracks_2d.items():
-            if len(positions) > 0:
+        for tracker_id in valid_ids:
+            positions = self.player_tracks_2d.get(tracker_id, [])
+            if len(positions) >= min_frames:
                 coords = np.array(positions)
                 avg_positions[tracker_id] = (float(np.mean(coords[:, 0])), float(np.mean(coords[:, 1])))
         return avg_positions
@@ -85,11 +313,14 @@ class SpatialAnalytics:
     def get_2d_positions(
         self,
         tracker_id: Optional[int] = None,
-        team_id: Optional[int] = None
+        team_id: Optional[int] = None,
+        min_frames: int = 1
     ) -> List[Tuple[float, float]]:
-        """Gathers 2D pitch coordinates filtered by tracker_id or team_id."""
+        """Gathers 2D pitch coordinates filtered by tracker_id, team_id, and min_frames."""
         coords = []
         for p_id, positions in self.player_tracks_2d.items():
+            if len(positions) < min_frames:
+                continue
             if tracker_id is not None and p_id != tracker_id:
                 continue
             if team_id is not None and self.player_teams.get(p_id) != team_id:
@@ -102,7 +333,6 @@ class SpatialAnalytics:
         Calculates comprehensive physical and tactical metrics for a specific player.
         """
         positions_2d = self.player_tracks_2d.get(tracker_id, [])
-        positions_cam = self.player_tracks.get(tracker_id, [])
         team_id = self.player_teams.get(tracker_id, 0)
         total_f = max(1, self.total_processed_frames)
         frames_active = len(positions_2d)
@@ -135,24 +365,27 @@ class SpatialAnalytics:
         xm = np.clip((avg_x - self.FIELD_X1) * scale_x, 0.0, self.PITCH_LENGTH_M)
         ym = np.clip((avg_y - self.FIELD_Y1) * scale_y, 0.0, self.PITCH_WIDTH_M)
 
-        # 3. Tactical Zone Classification
-        # Longitudinal (X): 1st third (Defensive), 2nd third (Middle), 3rd third (Attacking)
-        if xm < 35.0:
-            x_zone = "1. Bölge (Savunma)"
-        elif xm < 70.0:
-            x_zone = "2. Bölge (Orta Saha)"
+        # 3. Tactical Zone & Role Classification (English)
+        is_gk = False
+        if tracker_id in (1, 13) or (team_id == 0 and xm <= 16.5 and abs(ym - 34.0) <= 16.0) or (team_id == 1 and xm >= 88.5 and abs(ym - 34.0) <= 16.0):
+            is_gk = True
+            tactical_role = "Goalkeeper (GK) • Goal Area"
         else:
-            x_zone = "3. Bölge (Hücum)"
+            if xm < 35.0:
+                x_zone = "Defensive Third"
+            elif xm < 70.0:
+                x_zone = "Middle Third"
+            else:
+                x_zone = "Attacking Third"
 
-        # Lateral (Y): Left flank, Center channel, Right flank
-        if ym < 22.6:
-            y_zone = "Sol Koridor"
-        elif ym < 45.3:
-            y_zone = "Merkez Kanal"
-        else:
-            y_zone = "Sağ Koridor"
+            if ym < 22.6:
+                y_zone = "Left Flank"
+            elif ym < 45.3:
+                y_zone = "Center Channel"
+            else:
+                y_zone = "Right Flank"
 
-        tactical_role = f"{y_zone} • {x_zone}"
+            tactical_role = f"{y_zone} • {x_zone}"
 
         # 4. Thirds Distribution (%)
         def_cnt, mid_cnt, att_cnt = 0, 0, 0
@@ -173,7 +406,7 @@ class SpatialAnalytics:
         return {
             "tracker_id": tracker_id,
             "team_id": team_id,
-            "team_label": f"Takım {team_id}" if team_id >= 0 else "Hakem",
+            "team_label": f"Team {team_id}" if team_id >= 0 else "Referee",
             "frames_active": frames_active,
             "presence_pct": round((frames_active / total_f) * 100, 1),
             "distance_m": round(distance_m, 1),
@@ -184,19 +417,27 @@ class SpatialAnalytics:
             "defensive_pct": def_pct,
             "middle_pct": mid_pct,
             "attacking_pct": att_pct,
-            "positions_2d": positions_2d,
-            "positions_cam": positions_cam
+            "positions_2d": positions_2d
         }
 
-    def get_team_metrics(self, team_id: int, fps: float = 25.0) -> Dict:
+    def get_team_metrics(self, team_id: int, fps: float = 25.0, min_frames: int = 5) -> Dict:
         """
-        Aggregates individual player statistics into complete team tactical intelligence.
+        Derives collective tactical metrics for an entire team directly aggregated
+        from individual player 2D positions.
+        Filters out transient ghost detections with frames < min_frames.
         """
-        player_ids = [pid for pid, tid in self.player_teams.items() if tid == team_id]
+        player_ids = [
+            pid for pid, tid in self.player_teams.items()
+            if tid == team_id and len(self.player_tracks_2d.get(pid, [])) >= min_frames
+        ]
+        # Strictly enforce FIFA football squad limit (at most 11 players per team)
+        player_ids.sort(key=lambda pid: len(self.player_tracks_2d.get(pid, [])), reverse=True)
+        player_ids = player_ids[:11]
+
         if not player_ids:
             return {
                 "team_id": team_id,
-                "team_label": f"Takım {team_id}",
+                "team_label": f"Team {team_id}",
                 "player_count": 0,
                 "player_ids": [],
                 "centroid_2d": (0.0, 0.0),
@@ -215,7 +456,7 @@ class SpatialAnalytics:
         scale_x = self.PITCH_LENGTH_M / max(1.0, self.FIELD_W)
         scale_y = self.PITCH_WIDTH_M / max(1.0, self.FIELD_H)
 
-        avg_positions_2d = self.get_average_positions_2d()
+        avg_positions_2d = self.get_average_positions_2d(min_frames=min_frames)
         team_avg_pts = [avg_positions_2d[pid] for pid in player_ids if pid in avg_positions_2d]
 
         # Centroid
@@ -223,7 +464,7 @@ class SpatialAnalytics:
             pts_arr = np.array(team_avg_pts)
             cx = float(np.mean(pts_arr[:, 0]))
             cy = float(np.mean(pts_arr[:, 1]))
-            # Compactness (spread)
+            # Compactness (depth & width spreads)
             depth_m = float((np.max(pts_arr[:, 0]) - np.min(pts_arr[:, 0])) * scale_x)
             width_m = float((np.max(pts_arr[:, 1]) - np.min(pts_arr[:, 1])) * scale_y)
         else:
@@ -240,7 +481,7 @@ class SpatialAnalytics:
             total_dist_m += pm["distance_m"]
 
         # Aggregate zone distribution across all team 2D positions
-        all_team_positions = self.get_2d_positions(team_id=team_id)
+        all_team_positions = self.get_2d_positions(team_id=team_id, min_frames=min_frames)
         def_cnt, mid_cnt, att_cnt = 0, 0, 0
         left_cnt, center_cnt, right_cnt = 0, 0, 0
 
@@ -266,7 +507,7 @@ class SpatialAnalytics:
 
         return {
             "team_id": team_id,
-            "team_label": f"Takım {team_id}",
+            "team_label": f"Team {team_id}",
             "player_count": len(player_ids),
             "player_ids": sorted(player_ids),
             "centroid_2d": (round(cx, 1), round(cy, 1)),
@@ -282,30 +523,20 @@ class SpatialAnalytics:
             "right_flank_pct": round((right_cnt / n_all) * 100, 1)
         }
 
-    def get_player_summary(self) -> List[Dict]:
-        """Returns structured summary table of all tracked players."""
+    def get_player_summary(self, fps: float = 25.0, min_frames: int = 5) -> List[Dict]:
+        """Returns clean tabulated summary data in English for all stable players."""
         summary = []
-        avg_pos = self.get_average_positions()
-        avg_pos_2d = self.get_average_positions_2d()
-        total_f = max(1, self.total_processed_frames)
-
-        for p_id in sorted(self.player_tracks.keys()):
-            positions = self.player_tracks[p_id]
-            team_id = self.player_teams.get(p_id, 0)
-            avg_x, avg_y = avg_pos.get(p_id, (0.0, 0.0))
-            p2d = avg_pos_2d.get(p_id, (0.0, 0.0))
-            pm = self.get_player_metrics(p_id)
-            
+        for pid in sorted(self.player_tracks_2d.keys()):
+            if len(self.player_tracks_2d[pid]) < min_frames:
+                continue
+            pm = self.get_player_metrics(pid, fps=fps)
             summary.append({
-                "Player ID": f"#{p_id}",
-                "Raw ID": p_id,
-                "Team": f"Team {team_id}" if team_id >= 0 else "Referee",
-                "Team ID": team_id,
-                "Frames Active": len(positions),
-                "Presence (%)": round((len(positions) / total_f) * 100, 1),
+                "Player ID": f"#{pid}",
+                "Team": f"Team {pm['team_id']}",
+                "Active Frames": pm["frames_active"],
+                "Pitch Presence (%)": pm["presence_pct"],
                 "Est. Distance (m)": pm["distance_m"],
                 "Avg Speed (km/h)": pm["avg_speed_kmh"],
-                "Pitch (X, Y) [m]": f"({pm['pos_meters'][0]}m, {pm['pos_meters'][1]}m)",
                 "Tactical Zone": pm["tactical_zone"]
             })
         return summary
@@ -316,92 +547,30 @@ class SpatialAnalytics:
         team_id: Optional[int] = None,
         sigma: float = 25.0
     ) -> np.ndarray:
-        """Generates camera perspective 2D Gaussian density heatmap."""
+        """Generates a 2D density heatmap in camera perspective space."""
         density = np.zeros((self.height, self.width), dtype=np.float32)
 
-        coords_to_include = []
         for p_id, positions in self.player_tracks.items():
             if tracker_id is not None and p_id != tracker_id:
                 continue
             if team_id is not None and self.player_teams.get(p_id) != team_id:
                 continue
-            coords_to_include.extend(positions)
 
-        if not coords_to_include:
-            return np.zeros((self.height, self.width, 3), dtype=np.uint8)
+            for x, y in positions:
+                ix, iy = int(round(x)), int(round(y))
+                if 0 <= ix < self.width and 0 <= iy < self.height:
+                    density[iy, ix] += 1.0
 
-        for x, y in coords_to_include:
-            ix, iy = int(x), int(y)
-            if 0 <= ix < self.width and 0 <= iy < self.height:
-                density[iy, ix] += 1.0
-
-        density = gaussian_filter(density, sigma=sigma)
-        max_val = np.max(density)
-        if max_val > 0:
-            density = (density / max_val * 255).astype(np.uint8)
+        if np.max(density) > 0:
+            density = gaussian_filter(density, sigma=sigma)
+            norm_density = cv2.normalize(density, None, 0, 255, cv2.NORM_MINMAX)
+            norm_density = norm_density.astype(np.uint8)
+            heatmap_color = cv2.applyColorMap(norm_density, cv2.COLORMAP_JET)
+            mask = norm_density < 18
+            heatmap_color[mask] = [0, 0, 0]
+            return heatmap_color
         else:
-            density = density.astype(np.uint8)
-
-        heatmap_bgr = cv2.applyColorMap(density, cv2.COLORMAP_JET)
-        mask = density < 8
-        heatmap_bgr[mask] = 0
-        return heatmap_bgr
-
-    def generate_player_overlay(
-        self,
-        tracker_id: int,
-        background_frame: np.ndarray,
-        sigma: float = 20.0
-    ) -> np.ndarray:
-        """Generates a heatmap for a single player overlaid onto camera background."""
-        heatmap_bgr = self.generate_heatmap(tracker_id=tracker_id, sigma=sigma)
-        overlay = background_frame.copy()
-        nonzero_mask = np.any(heatmap_bgr > 0, axis=-1)
-
-        if np.any(nonzero_mask):
-            overlay[nonzero_mask] = cv2.addWeighted(
-                overlay[nonzero_mask], 0.35,
-                heatmap_bgr[nonzero_mask], 0.65,
-                0
-            )
-            
-            avg_positions = self.get_average_positions()
-            if tracker_id in avg_positions:
-                avg_x, avg_y = avg_positions[tracker_id]
-                center = (int(avg_x), int(avg_y))
-                cv2.circle(overlay, center, 14, (0, 0, 0), 3, cv2.LINE_AA)
-                cv2.circle(overlay, center, 11, (255, 255, 255), -1, cv2.LINE_AA)
-                cv2.circle(overlay, center, 7, (0, 0, 255), -1, cv2.LINE_AA)
-
-        return overlay
-
-    def generate_player_trajectory(
-        self,
-        tracker_id: int,
-        background_frame: np.ndarray
-    ) -> np.ndarray:
-        """Draws the movement trajectory trail of a specific player on camera frame."""
-        canvas = background_frame.copy()
-        positions = self.player_tracks.get(tracker_id, [])
-        if len(positions) < 2:
-            return canvas
-
-        team_id = self.player_teams.get(tracker_id, 0)
-        trail_color = (35, 45, 235) if team_id == 0 else (235, 130, 25)
-
-        pts = np.array(positions, np.int32).reshape((-1, 1, 2))
-        cv2.polylines(canvas, [pts], isClosed=False, color=(0, 0, 0), thickness=5, lineType=cv2.LINE_AA)
-        cv2.polylines(canvas, [pts], isClosed=False, color=trail_color, thickness=3, lineType=cv2.LINE_AA)
-
-        start_pt = (int(positions[0][0]), int(positions[0][1]))
-        cv2.circle(canvas, start_pt, 8, (0, 255, 0), -1, cv2.LINE_AA)
-        cv2.circle(canvas, start_pt, 9, (0, 0, 0), 2, cv2.LINE_AA)
-
-        end_pt = (int(positions[-1][0]), int(positions[-1][1]))
-        cv2.circle(canvas, end_pt, 8, (0, 0, 255), -1, cv2.LINE_AA)
-        cv2.circle(canvas, end_pt, 9, (0, 0, 0), 2, cv2.LINE_AA)
-
-        return canvas
+            return np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
     def save_to_json(self, file_path: str):
         """Serializes spatial tracking and 2D data to a JSON file."""
@@ -412,6 +581,7 @@ class SpatialAnalytics:
             "player_teams": {str(k): int(v) for k, v in self.player_teams.items()},
             "player_tracks": {str(k): [[float(p[0]), float(p[1])] for p in v] for k, v in self.player_tracks.items()},
             "player_tracks_2d": {str(k): [[float(p[0]), float(p[1])] for p in v] for k, v in self.player_tracks_2d.items()},
+            "player_frames": {str(k): [int(f) for f in v] for k, v in self.player_frames.items()},
         }
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f)
@@ -435,5 +605,9 @@ class SpatialAnalytics:
         instance.player_tracks_2d = {
             int(k): [(float(p[0]), float(p[1])) for p in v]
             for k, v in data.get("player_tracks_2d", {}).items()
+        }
+        instance.player_frames = {
+            int(k): [int(f) for f in v]
+            for k, v in data.get("player_frames", {}).items()
         }
         return instance

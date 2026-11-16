@@ -148,12 +148,16 @@ def run_pipeline(
             if team_assigner.team_kmeans is not None:
                 color = team_assigner.extract_jersey_color(frame, bbox)
                 if color is not None:
-                    pred_team = team_assigner.predict_team(color)
+                    pred_team, conf = team_assigner.predict_team_with_confidence(color)
                     if t_id is not None:
-                        player_team_votes[t_id][pred_team] += 1
+                        # Weight confident detections
+                        weight = 2 if conf > 0.60 else 1
+                        player_team_votes[t_id][pred_team] += weight
                         team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
                     else:
                         team_id = pred_team
+                elif t_id is not None and t_id in player_team_votes and player_team_votes[t_id]:
+                    team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
             elif t_id is not None and t_id in player_team_votes and player_team_votes[t_id]:
                 team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
 
@@ -165,7 +169,7 @@ def run_pipeline(
 
             # Record spatial coordinates and trail
             if t_id is not None:
-                spatial_analytics.add_position(t_id, bbox, team_id, pos_2d=pos_2d)
+                spatial_analytics.add_position(t_id, bbox, team_id, pos_2d=pos_2d, frame_idx=f_idx)
                 active_ids.add(t_id)
 
                 # Check jump distance to prevent line glitches
@@ -257,8 +261,22 @@ def run_pipeline(
     # 5. Step 3: Spatial Post-Processing (Camera Heatmaps & Formations)
     print("\n🗺️ Generating Heatmaps & Formations (Camera & 2D Top-Down)...")
     if progress_callback:
-        progress_callback(frames_to_process, frames_to_process, "Generating 2D Top-Down Pitch Analytics...")
-    
+        progress_callback(frames_to_process, frames_to_process, "Consolidating tracks and generating 2D Top-Down Pitch Analytics...")
+
+    # Consolidate fragmented tracks caused by camera pans / occlusions
+    spatial_analytics.consolidate_tracks(max_frame_gap=35, max_dist_px=90.0)
+
+    # Re-apply final consolidated team assignments
+    for tid in list(spatial_analytics.player_teams.keys()):
+        if tid in player_team_votes and player_team_votes[tid]:
+            spatial_analytics.player_teams[tid] = max(player_team_votes[tid], key=player_team_votes[tid].get)
+
+    # Strictly enforce FIFA football squad limit (at most 11 players per team)
+    spatial_analytics.enforce_team_squad_limits(max_players_per_team=11)
+
+    # Filter out transient ghost detections (under 5 frames) for clean tactical views
+    MIN_STABLE_FRAMES = 5
+
     # Camera Perspective Heatmaps
     team0_heatmap = spatial_analytics.generate_heatmap(team_id=0)
     team0_path = os.path.join(output_dir, "heatmap_team_0.png")
@@ -280,9 +298,9 @@ def run_pipeline(
         )
         cv2.imwrite(overlay_path, combined_overlay)
 
-    # Camera Perspective Average Formations
+    # Camera Perspective Average Formations (stable players only)
     formation_path = os.path.join(output_dir, "average_positions.png")
-    avg_positions = spatial_analytics.get_average_positions()
+    avg_positions = spatial_analytics.get_average_positions(min_frames=MIN_STABLE_FRAMES)
     if first_frame_saved is not None:
         formation_img = TacticalVisualizer.draw_average_positions(
             first_frame_saved,
@@ -296,26 +314,26 @@ def run_pipeline(
         cv2.imwrite(first_frame_path, first_frame_saved)
 
     # ----------------- 2D TOP-DOWN RECTANGULAR PITCH ARTIFACTS -----------------
-    # 2D Average Formations
-    avg_positions_2d = spatial_analytics.get_average_positions_2d()
+    # 2D Average Formations (stable players only)
+    avg_positions_2d = spatial_analytics.get_average_positions_2d(min_frames=MIN_STABLE_FRAMES)
     pitch_2d_formation_img = pitch_view.draw_2d_formations(avg_positions_2d, spatial_analytics.player_teams)
     pitch_2d_formation_path = os.path.join(output_dir, "pitch_2d_formation.png")
     cv2.imwrite(pitch_2d_formation_path, pitch_2d_formation_img)
 
-    # 2D Team 0 Heatmap
-    team0_pts_2d = spatial_analytics.get_2d_positions(team_id=0)
+    # 2D Team 0 Heatmap (stable players only)
+    team0_pts_2d = spatial_analytics.get_2d_positions(team_id=0, min_frames=MIN_STABLE_FRAMES)
     pitch_2d_team0_img = pitch_view.generate_2d_heatmap(team0_pts_2d)
     pitch_2d_team0_path = os.path.join(output_dir, "pitch_2d_heatmap_team0.png")
     cv2.imwrite(pitch_2d_team0_path, pitch_2d_team0_img)
 
-    # 2D Team 1 Heatmap
-    team1_pts_2d = spatial_analytics.get_2d_positions(team_id=1)
+    # 2D Team 1 Heatmap (stable players only)
+    team1_pts_2d = spatial_analytics.get_2d_positions(team_id=1, min_frames=MIN_STABLE_FRAMES)
     pitch_2d_team1_img = pitch_view.generate_2d_heatmap(team1_pts_2d)
     pitch_2d_team1_path = os.path.join(output_dir, "pitch_2d_heatmap_team1.png")
     cv2.imwrite(pitch_2d_team1_path, pitch_2d_team1_img)
 
-    # 2D Combined Heatmap
-    all_pts_2d = spatial_analytics.get_2d_positions()
+    # 2D Combined Heatmap (stable players only)
+    all_pts_2d = spatial_analytics.get_2d_positions(min_frames=MIN_STABLE_FRAMES)
     pitch_2d_all_img = pitch_view.generate_2d_heatmap(all_pts_2d)
     pitch_2d_all_path = os.path.join(output_dir, "pitch_2d_heatmap_all.png")
     cv2.imwrite(pitch_2d_all_path, pitch_2d_all_img)
