@@ -116,31 +116,39 @@ st.markdown("""
 
 
 # ----------------- SESSION STATE & INSTANT PRE-COMPUTED LOAD -----------------
-def init_session():
+def load_match_data(match_key: str):
     """
-    Instantly loads pre-computed sample match data from disk without delay.
-    Only recalculates if the user explicitly uploads a new custom video.
+    Instantly loads pre-computed match data from disk without any delay.
     """
-    if "results" not in st.session_state:
-        st.session_state["results"] = None
-
-    if st.session_state["results"] is None:
+    if match_key == "sample2":
+        spatial_json = "output_sample2/spatial_data.json"
+        video_file = "output_sample2/analyzed_match.mp4"
+    else:
         spatial_json = "output/spatial_data.json"
         video_file = "output/analyzed_match.mp4"
-        if os.path.exists(spatial_json):
-            try:
-                sa = SpatialAnalytics.load_from_json(spatial_json)
-                sa.enforce_team_squad_limits(max_players_per_team=11)
-                pv = PitchView2D(pitch_width=1050, pitch_height=680)
-                st.session_state["results"] = {
-                    "spatial_analytics": sa,
-                    "pitch_view": pv,
-                    "output_video_path": video_file if os.path.exists(video_file) else None,
-                    "total_players": len(sa.player_tracks),
-                    "video_info": {"width": sa.width, "height": sa.height, "total_frames": sa.total_processed_frames}
-                }
-            except Exception:
-                pass
+
+    if os.path.exists(spatial_json):
+        try:
+            sa = SpatialAnalytics.load_from_json(spatial_json)
+            sa.enforce_team_squad_limits(max_players_per_team=11)
+            pv = PitchView2D(pitch_width=1050, pitch_height=680)
+            return {
+                "spatial_analytics": sa,
+                "pitch_view": pv,
+                "output_video_path": video_file if os.path.exists(video_file) else None,
+                "total_players": len(sa.player_tracks),
+                "video_info": {"width": sa.width, "height": sa.height, "total_frames": sa.total_processed_frames}
+            }
+        except Exception:
+            pass
+    return None
+
+
+def init_session():
+    if "current_match" not in st.session_state:
+        st.session_state["current_match"] = "sample1"
+    if "results" not in st.session_state or st.session_state["results"] is None:
+        st.session_state["results"] = load_match_data(st.session_state["current_match"])
 
 
 init_session()
@@ -154,8 +162,28 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ----------------- CONTROLS ROW (DOWN ABOVE TABS) -----------------
-# Brought down below the header, right-aligned next to the tab navigation bar
-header_space, header_model, header_upload = st.columns([5.6, 2.2, 2.2], vertical_alignment="bottom")
+header_space, header_match, header_model, header_upload = st.columns([3.4, 2.6, 2.0, 2.0], vertical_alignment="bottom")
+
+with header_match:
+    match_labels = {
+        "sample1": "Match 1: Broadcast (sample.mp4)",
+        "sample2": "Match 2: Tactical Wide (sample2.mp4)"
+    }
+    match_keys = list(match_labels.keys())
+    cur_match = st.session_state.get("current_match", "sample1")
+    selected_match_idx = match_keys.index(cur_match) if cur_match in match_keys else 0
+
+    chosen_match = st.selectbox(
+        "Match Footage",
+        options=match_keys,
+        index=selected_match_idx,
+        format_func=lambda k: match_labels[k],
+        label_visibility="collapsed"
+    )
+    if chosen_match != st.session_state.get("current_match"):
+        st.session_state["current_match"] = chosen_match
+        st.session_state["results"] = load_match_data(chosen_match)
+        st.rerun()
 
 with header_model:
     model_choice = st.selectbox(
@@ -173,11 +201,13 @@ with header_upload:
         st.caption("Upload a custom video or re-run analysis across 100% of frames.")
         uploaded_custom = st.file_uploader("Select Match Video (MP4 / AVI)", type=["mp4", "avi", "mov"])
         
-        target_video = "data/sample_videos/sample.mp4"
+        target_video = "data/sample_videos/sample2.mp4" if chosen_match == "sample2" else "data/sample_videos/sample.mp4"
+        output_dest = "output_sample2" if chosen_match == "sample2" else "output"
         if uploaded_custom is not None:
             tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
             tfile.write(uploaded_custom.read())
             target_video = tfile.name
+            output_dest = "output_custom"
 
         run_btn = st.button("🚀 Run Full Video Analysis", type="primary", use_container_width=True)
 
@@ -195,7 +225,7 @@ if 'run_btn' in locals() and run_btn:
         with st.spinner("Processing every video frame with YOLO and 2D spatial tracking..."):
             pipeline_res = run_pipeline(
                 video_path=target_video,
-                output_dir="output",
+                output_dir=output_dest,
                 max_frames=0,  # 0 = ALL FRAMES
                 model_name=selected_model_path,
                 confidence=0.35,

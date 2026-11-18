@@ -36,6 +36,7 @@ venv.bak/
 # Project local outputs & weights
 runs/
 output/
+output*/
 data/videos/*.mp4
 data/videos/*.avi
 data/videos/*.mov

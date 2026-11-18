@@ -4,9 +4,12 @@ Processes match footage with YOLO11, pitch boundary segmentation,
 smooth player & ball tracking trails, and 2D top-down pitch analytics.
 """
 
+import os
+# Ensure Ultralytics config is local before importing detector or ultralytics
+os.environ["YOLO_CONFIG_DIR"] = os.path.abspath(".ultralytics")
+
 from collections import defaultdict, deque
 import math
-import os
 import argparse
 from typing import Callable, Dict, Optional
 import cv2
@@ -20,9 +23,6 @@ from src.analysis.heatmap import SpatialAnalytics
 from src.homography.pitch_view import PitchView2D
 from src.utils.video_utils import VideoHandler, create_video_writer
 from src.utils.drawing import TacticalVisualizer
-
-# Ensure Ultralytics config is local
-os.environ["YOLO_CONFIG_DIR"] = os.path.abspath(".ultralytics")
 
 
 def run_pipeline(

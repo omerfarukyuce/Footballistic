@@ -2,14 +2,14 @@
 Object detection and tracking module for football players, referees, and the ball using YOLO.
 """
 
-from dataclasses import dataclass
 import os
+# Ensure Ultralytics config is local before importing YOLO
+os.environ["YOLO_CONFIG_DIR"] = os.path.abspath(".ultralytics")
+
+from dataclasses import dataclass
 from typing import List, Optional
 import numpy as np
 from ultralytics import YOLO
-
-# Ensure Ultralytics config is local
-os.environ["YOLO_CONFIG_DIR"] = os.path.abspath(".ultralytics")
 
 
 @dataclass
