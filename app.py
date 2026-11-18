@@ -374,10 +374,23 @@ with tab_player:
             if not filtered_ids:
                 st.warning("No players found in this team category.")
             else:
+                def is_player_gk(pid):
+                    if pid in (1, 13) or str(pid) in ("1", "13"):
+                        return True
+                    pts = spatial_analytics.player_tracks_2d.get(pid, [])
+                    if pts:
+                        avg_px = np.mean(pts, axis=0)
+                        xm = (avg_px[0] - spatial_analytics.FIELD_X1) * (105.0 / max(1.0, spatial_analytics.FIELD_W))
+                        ym = (avg_px[1] - spatial_analytics.FIELD_Y1) * (68.0 / max(1.0, spatial_analytics.FIELD_H))
+                        tid = spatial_analytics.player_teams.get(pid, 0)
+                        if (tid == 0 and xm <= 16.5 and abs(ym - 34.0) <= 16.0) or (tid == 1 and xm >= 88.5 and abs(ym - 34.0) <= 16.0):
+                            return True
+                    return False
+
                 def format_player_label(pid):
                     t = spatial_analytics.player_teams.get(pid, 0)
                     t_str = "Team 0" if t == 0 else "Team 1"
-                    if pid in (1, 13) or str(pid) in ("1", "13"):
+                    if is_player_gk(pid):
                         return f"Player #{pid} (GK)  •  {t_str} [Goalkeeper]"
                     return f"Player #{pid}  •  {t_str}"
 
@@ -390,7 +403,7 @@ with tab_player:
                 # Metrics for ONLY this selected player
                 pm = spatial_analytics.get_player_metrics(selected_pid)
                 team_id = pm["team_id"]
-                is_keeper = selected_pid in (1, 13) or str(selected_pid) in ("1", "13")
+                is_keeper = pm.get("is_goalkeeper", is_player_gk(selected_pid))
 
                 # Clean Metrics Strip
                 m1, m2, m3, m4 = st.columns(4)

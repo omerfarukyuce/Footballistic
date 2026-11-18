@@ -1,10 +1,12 @@
-# ByteTrack optimized for broadcast football footage
-# Compensates for camera panning, fast player runs, and occlusions.
+# ByteTrack optimized for broadcast & tactical football footage.
+# Larger track_buffer keeps track IDs alive through camera pans and long occlusions.
+# Lower new_track_thresh avoids spawning fresh IDs for partially-visible distant players.
+# match_thresh at 0.65 gives robust re-association without false merges.
 
 tracker_type: bytetrack
 track_high_thresh: 0.35
-track_low_thresh: 0.15
-new_track_thresh: 0.50
-track_buffer: 60
-match_thresh: 0.60
+track_low_thresh: 0.10
+new_track_thresh: 0.40
+track_buffer: 90
+match_thresh: 0.65
 fuse_score: True

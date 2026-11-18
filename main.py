@@ -64,25 +64,33 @@ def run_pipeline(
     spatial_analytics.set_total_frames(frames_to_process)
 
     # 2. Step 1: Pre-fit Team Colors from initial frames
+    # Use is_strictly_inside_pitch so coaches / staff at the touchline
+    # are excluded from the jersey-colour calibration pass.
     print("👕 Calibrating Team Jersey Colors from sample frames...")
     if progress_callback:
         progress_callback(0, frames_to_process, "Calibrating Team Colors...")
-        
+
     sampled_colors = []
     sample_stride = 4
     for f_idx, frame in video.frame_generator():
-        if f_idx >= 60:
+        if f_idx >= 90:   # Scan first 90 frames for a richer colour sample
             break
         if f_idx % sample_stride != 0:
             continue
-        
-        # Segment pitch
+
         pitch_detector.get_pitch_mask(frame)
         detection = detector.detect_and_track(frame, persist=False)
         for player in detection.players:
-            # Check if player feet are on the playable pitch
+            # Use STRICT boundary so touchline coaches are excluded
             foot_pos = ((player.bbox[0] + player.bbox[2]) / 2.0, player.bbox[3])
-            if not pitch_detector.is_inside_pitch(foot_pos):
+            if not pitch_detector.is_strictly_inside_pitch(foot_pos):
+                continue
+
+            # Skip very small bboxes (distant players sampled at calibration
+            # time are noisy; include them only if large enough for a stable crop)
+            bw = player.bbox[2] - player.bbox[0]
+            bh = player.bbox[3] - player.bbox[1]
+            if bw < 15 or bh < 25:
                 continue
 
             color = team_assigner.extract_jersey_color(frame, player.bbox)
@@ -139,44 +147,78 @@ def run_pipeline(
             t_id = player.tracker_id
             bottom_center = ((bbox[0] + bbox[2]) / 2.0, bbox[3])
 
-            # Filter out people in the stands / bench / outside pitch
-            if not pitch_detector.is_inside_pitch(bottom_center):
+            # 1. Filter out people outside the pitch boundary (stands, bench, coaches)
+            #    tolerance_px=0.0 ensures nobody outside the touchline is admitted.
+            if not pitch_detector.is_inside_pitch(bottom_center, tolerance_px=0.0):
                 continue
 
-            # Stable Team Assignment with Temporal Majority Voting
-            team_id = 0
-            if team_assigner.team_kmeans is not None:
-                color = team_assigner.extract_jersey_color(frame, bbox)
-                if color is not None:
-                    pred_team, conf = team_assigner.predict_team_with_confidence(color)
-                    if t_id is not None:
-                        # Weight confident detections
-                        weight = 2 if conf > 0.60 else 1
-                        player_team_votes[t_id][pred_team] += weight
-                        team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
-                    else:
-                        team_id = pred_team
-                elif t_id is not None and t_id in player_team_votes and player_team_votes[t_id]:
-                    team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
-            elif t_id is not None and t_id in player_team_votes and player_team_votes[t_id]:
-                team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
+            # 2. Skip bboxes too small to classify reliably (very distant / noise)
+            bw = bbox[2] - bbox[0]
+            bh = bbox[3] - bbox[1]
+            if bw < 8 or bh < 16:
+                continue
 
-            # Map to 2D Top-Down Pitch
+            # Map to 2D top-down pitch early for positional intelligence (GK zone detection)
             pos_2d = pitch_view.map_camera_to_2d(
                 bottom_center[0], bottom_center[1],
                 cam_w=video_info["width"], cam_h=video_info["height"]
             )
 
-            # Record spatial coordinates and trail
+            # 3. Team colour classification with outlier rejection
+            #    predict_team_with_confidence returns team_id = -1 for non-standard jersey colors
+            team_id = -1
+            if team_assigner.team_kmeans is not None:
+                color = team_assigner.extract_jersey_color(frame, bbox)
+                if color is not None:
+                    pred_team, conf = team_assigner.predict_team_with_confidence(color)
+                    if pred_team == -1:
+                        # Colour outlier: Check if located in a goalkeeper defending zone
+                        # Pitch X: field_x1=40, field_x2=1010; Field Y: field_y1=40, field_y2=640 (Center=340).
+                        # Defending left goal (<220px in 2D and within penalty box Y range [200, 480]) -> Team 0 GK
+                        # Defending right goal (>830px in 2D and within penalty box Y range [200, 480]) -> Team 1 GK
+                        in_left_gk_zone = (pos_2d[0] < 220) and (200.0 <= pos_2d[1] <= 480.0)
+                        in_right_gk_zone = (pos_2d[0] > 830) and (200.0 <= pos_2d[1] <= 480.0)
+                        if in_left_gk_zone:
+                            pred_team = 0
+                            conf = 0.90
+                        elif in_right_gk_zone:
+                            pred_team = 1
+                            conf = 0.90
+                        else:
+                            # In midfield, touchline, or sideline -> Outlier is a Referee or Coach/Staff. Skip entirely!
+                            continue
+
+                    if t_id is not None:
+                        # Confidence-weighted temporal majority voting
+                        weight = 3 if conf > 0.70 else (2 if conf > 0.55 else 1)
+                        player_team_votes[t_id][pred_team] += weight
+                        team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
+                    else:
+                        team_id = pred_team
+                else:
+                    # No colour extracted: use previous vote if available
+                    if t_id is not None and player_team_votes[t_id]:
+                        team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
+                    else:
+                        continue  # Cannot classify -> skip
+            elif t_id is not None and player_team_votes[t_id]:
+                team_id = max(player_team_votes[t_id], key=player_team_votes[t_id].get)
+            else:
+                team_id = 0
+
+            if team_id < 0:
+                continue  # Safety: drop any remaining unclassified detections
+
+            # 4. Record spatial coordinates and trail
             if t_id is not None:
                 spatial_analytics.add_position(t_id, bbox, team_id, pos_2d=pos_2d, frame_idx=f_idx)
                 active_ids.add(t_id)
 
-                # Check jump distance to prevent line glitches
+                # Prevent motion-trail glitches from large ID-swap jumps
                 if len(player_trails[t_id]) > 0:
                     prev_p = player_trails[t_id][-1]
                     dist = math.hypot(bottom_center[0] - prev_p[0], bottom_center[1] - prev_p[1])
-                    if dist > 80.0:  # Player teleport / tracker ID swap glitch
+                    if dist > 80.0:
                         player_trails[t_id].clear()
 
                 player_trails[t_id].append(bottom_center)
@@ -258,24 +300,53 @@ def run_pipeline(
     writer.release()
     print(f"\n🎥 Analyzed video saved to: {output_video_path}")
 
-    # 5. Step 3: Spatial Post-Processing (Camera Heatmaps & Formations)
+    # 5. Step 3: Spatial Post-Processing
     print("\n🗺️ Generating Heatmaps & Formations (Camera & 2D Top-Down)...")
     if progress_callback:
-        progress_callback(frames_to_process, frames_to_process, "Consolidating tracks and generating 2D Top-Down Pitch Analytics...")
+        progress_callback(frames_to_process, frames_to_process, "Consolidating tracks and generating 2D analytics...")
 
-    # Consolidate fragmented tracks caused by camera pans / occlusions
-    spatial_analytics.consolidate_tracks(max_frame_gap=35, max_dist_px=90.0)
+    # 5a. Consolidate fragmented tracklets (camera pans / occlusions)
+    #     Wider gap and bigger spatial tolerance now that we have track_buffer=90
+    spatial_analytics.consolidate_tracks(max_frame_gap=60, max_dist_px=120.0)
 
-    # Re-apply final consolidated team assignments
+    # 5b. Re-apply final consolidated team assignments from vote history
     for tid in list(spatial_analytics.player_teams.keys()):
         if tid in player_team_votes and player_team_votes[tid]:
-            spatial_analytics.player_teams[tid] = max(player_team_votes[tid], key=player_team_votes[tid].get)
+            spatial_analytics.player_teams[tid] = max(
+                player_team_votes[tid], key=player_team_votes[tid].get
+            )
 
-    # Strictly enforce FIFA football squad limit (at most 11 players per team)
+    # 5c. Re-assign outlier-labelled tracks that slipped through
+    #     (edge-case: a GK whose distinctive kit was classified as outlier
+    #      during consolidation; use position to decide their team)
+    for tid in list(spatial_analytics.player_teams.keys()):
+        if spatial_analytics.player_teams[tid] < 0:
+            pts = spatial_analytics.player_tracks_2d.get(tid, [])
+            if pts:
+                avg_x = float(np.mean([p[0] for p in pts]))
+                avg_y = float(np.mean([p[1] for p in pts]))
+                # GK must be located in defending goal area in both X and Y
+                if 200.0 <= avg_y <= 480.0 and (avg_x < 220 or avg_x > 830):
+                    reassigned = team_assigner.infer_goalkeeper_team(avg_x)
+                    spatial_analytics.player_teams[tid] = reassigned
+                else:
+                    # Referee or coach outlier -> remove
+                    spatial_analytics.player_teams.pop(tid, None)
+                    spatial_analytics.player_tracks.pop(tid, None)
+                    spatial_analytics.player_tracks_2d.pop(tid, None)
+                    spatial_analytics.player_frames.pop(tid, None)
+            else:
+                # Cannot determine position → remove
+                spatial_analytics.player_teams.pop(tid, None)
+                spatial_analytics.player_tracks.pop(tid, None)
+                spatial_analytics.player_tracks_2d.pop(tid, None)
+                spatial_analytics.player_frames.pop(tid, None)
+
+    # 5d. Strictly enforce FIFA squad limit (11 per team, 1 GK + 10 outfield)
     spatial_analytics.enforce_team_squad_limits(max_players_per_team=11)
 
-    # Filter out transient ghost detections (under 5 frames) for clean tactical views
-    MIN_STABLE_FRAMES = 5
+    # Minimum frames to be considered a stable (non-ghost) detection
+    MIN_STABLE_FRAMES = 8
 
     # Camera Perspective Heatmaps
     team0_heatmap = spatial_analytics.generate_heatmap(team_id=0)

@@ -230,6 +230,11 @@ class SpatialAnalytics:
                     avg_px = np.mean(pts, axis=0)
                     avg_xm = (avg_px[0] - self.FIELD_X1) * scale_x
                     avg_ym = (avg_px[1] - self.FIELD_Y1) * scale_y
+
+                    # Reject coaches, bench staff, or linesmen standing at the touchline
+                    if avg_ym >= 65.5 or avg_ym <= 2.5 or avg_xm < 0.5 or avg_xm > 104.5:
+                        continue
+
                     if (team_id == 0 and avg_xm <= 14.0 and abs(avg_ym - 34.0) <= 8.5) or \
                        (team_id == 1 and avg_xm >= 91.0 and abs(avg_ym - 34.0) <= 8.5):
                         gk_pids.append(pid)
@@ -414,6 +419,7 @@ class SpatialAnalytics:
             "avg_pos_2d": (round(avg_x, 1), round(avg_y, 1)),
             "pos_meters": (round(xm, 1), round(ym, 1)),
             "tactical_zone": tactical_role,
+            "is_goalkeeper": is_gk,
             "defensive_pct": def_pct,
             "middle_pct": mid_pct,
             "attacking_pct": att_pct,
@@ -511,7 +517,7 @@ class SpatialAnalytics:
             "player_count": len(player_ids),
             "player_ids": sorted(player_ids),
             "centroid_2d": (round(cx, 1), round(cy, 1)),
-            "centroid_m": (round(cx_m, 1), round(cy_m, 1)),
+            "centroid_m": (round(float(cx_m), 1), round(float(cy_m), 1)),
             "team_width_m": round(width_m, 1),
             "team_depth_m": round(depth_m, 1),
             "total_distance_m": round(total_dist_m, 1),
