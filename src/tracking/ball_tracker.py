@@ -303,7 +303,7 @@ class BallTracker:
         if (
             chosen is None
             and pred_pos is not None
-            and self.frames_since_seen <= 10
+            and 1 <= self.frames_since_seen <= 3
             and detector is not None
         ):
             roi_balls = detector.detect_ball_in_roi(

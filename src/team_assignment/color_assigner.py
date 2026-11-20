@@ -47,8 +47,13 @@ class TeamColorAssigner:
     def extract_jersey_color(self, frame: np.ndarray, bbox: List[float]) -> Optional[np.ndarray]:
         """
         Returns the median BGR jersey colour from the upper-torso region
-        (16%-48% height, 22%-78% width) after masking out green grass pixels.
-        Works reliably for both close and small distant players (down to 10x18 px).
+        (16%-48% height, 22%-78% width) after subtracting the LOCAL pitch grass
+        shade sampled near the player's feet.
+        Unlike a broad static green mask (H=30..85, V=35..255) which accidentally
+        erases bright lime-green or dark-green team kits (forcing fallback to black
+        collars/skin), local grass subtraction only masks pixels matching the actual
+        turf brightness and saturation (+/- 36 V, +/- 9 H), preserving green/lime
+        jerseys as well as white, dark navy, red, blue, and yellow kits.
         """
         x1, y1, x2, y2 = map(int, bbox)
         h = y2 - y1
@@ -70,19 +75,44 @@ class TeamColorAssigner:
         if chest.size == 0:
             return None
 
-        # Mask out green grass background pixels inside the torso box
-        hsv = cv2.cvtColor(chest, cv2.COLOR_BGR2HSV)
-        grass_mask = (
-            (hsv[:, :, 0] >= 30) & (hsv[:, :, 0] <= 85) &
-            (hsv[:, :, 1] >= 42) & (hsv[:, :, 2] >= 35)
-        )
-        non_grass = chest[~grass_mask]
+        chest_hsv = cv2.cvtColor(chest, cv2.COLOR_BGR2HSV)
 
-        # Use non-grass pixels if sufficient pixels remain (otherwise jersey itself may be green)
-        if len(non_grass) >= max(8, int(chest.shape[0] * chest.shape[1] * 0.15)):
+        # Sample local turf pixels around the lower 25% of the player's bbox
+        gy1 = max(0, y2 - int(h * 0.25))
+        gy2 = min(fh, y2 + 2)
+        gx1 = max(0, x1 - 4)
+        gx2 = min(fw, x2 + 4)
+        lower = frame[gy1:gy2, gx1:gx2]
+
+        grass_mask = None
+        if lower.size > 0:
+            l_hsv = cv2.cvtColor(lower, cv2.COLOR_BGR2HSV).reshape(-1, 3)
+            turf_pts = l_hsv[
+                (l_hsv[:, 0] >= 28) & (l_hsv[:, 0] <= 58) &
+                (l_hsv[:, 1] >= 45) &
+                (l_hsv[:, 2] >= 35) & (l_hsv[:, 2] <= 185)
+            ]
+            if len(turf_pts) >= 5:
+                gh, gs, gv = np.median(turf_pts, axis=0)
+                grass_mask = (
+                    (np.abs(chest_hsv[:, :, 0].astype(np.float32) - float(gh)) <= 9.0) &
+                    (np.abs(chest_hsv[:, :, 1].astype(np.float32) - float(gs)) <= 50.0) &
+                    (np.abs(chest_hsv[:, :, 2].astype(np.float32) - float(gv)) <= 36.0)
+                )
+
+        if grass_mask is None:
+            # Fallback narrow natural turf range (excludes neon/lime V > 180 and dark green V < 48)
+            grass_mask = (
+                (chest_hsv[:, :, 0] >= 32) & (chest_hsv[:, :, 0] <= 56) &
+                (chest_hsv[:, :, 1] >= 55) &
+                (chest_hsv[:, :, 2] >= 48) & (chest_hsv[:, :, 2] <= 175)
+            )
+
+        non_grass = chest[~grass_mask]
+        if len(non_grass) >= max(6, int(chest.shape[0] * chest.shape[1] * 0.18)):
             return np.median(non_grass, axis=0).astype(np.float32)
 
-        # Fallback for green jerseys: sample tight central core of torso
+        # Fallback: tight central core of torso
         ty1 = max(0, y1 + int(h * 0.20))
         ty2 = min(fh, y1 + int(h * 0.42))
         tx1 = max(0, x1 + int(w * 0.32))
@@ -107,11 +137,73 @@ class TeamColorAssigner:
 
     # ------------------------------------------------------------------ fitting
 
+    @staticmethod
+    def _fit_two_major_team_clusters(pool_arr: np.ndarray) -> Tuple[KMeans, np.ndarray, np.ndarray]:
+        """
+        Fits the two main outfield team clusters in CIE Lab space.
+        Crucial guard: when both outfield teams wear bright kits (e.g. White vs Bright
+        Lime Green in sample.mp4) and the referee + GK wear Black, a naive k=2 KMeans
+        puts one cluster on the 2 black individuals (<25% of tracks) and merges all
+        19 outfielders into the second cluster!
+        If k=2 produces a lopsided tiny cluster (<25% share), we strip that small
+        referee/GK outlier group and refit k=2 on the remaining 75%+ majority pool,
+        then trim the furthest 12% residuals for crisp team centroids.
+        """
+        working = pool_arr.copy()
+
+        # Emphasize chromaticity (a*, b*) relative to brightness (L*) so sun/shadow
+        # variations don't dominate over kit hue differences (e.g. White vs Lime Green)
+        weights = np.array([0.70, 1.35, 1.35], dtype=np.float32)
+
+        for _attempt in range(2):
+            if len(working) < 4:
+                break
+            w_pool = working * weights
+            km = KMeans(n_clusters=2, n_init=15, random_state=42)
+            lbl = km.fit_predict(w_pool)
+            c0_count = int(np.sum(lbl == 0))
+            c1_count = int(np.sum(lbl == 1))
+            min_share = min(c0_count, c1_count) / float(len(working))
+
+            if min_share < 0.26 and len(working) >= 8:
+                # Tiny cluster is a referee/GK outlier group -> remove it and refit k=2!
+                major_label = 0 if c0_count >= c1_count else 1
+                working = working[lbl == major_label]
+                continue
+            break
+
+        # Final trimmed fit on the balanced 2-team pool
+        w_work = working * weights
+        km1 = KMeans(n_clusters=2, n_init=15, random_state=42)
+        lbl1 = km1.fit_predict(w_work)
+        c1_unweighted = np.array([
+            np.mean(working[lbl1 == 0], axis=0) if np.any(lbl1 == 0) else km1.cluster_centers_[0] / weights,
+            np.mean(working[lbl1 == 1], axis=0) if np.any(lbl1 == 1) else km1.cluster_centers_[1] / weights,
+        ], dtype=np.float32)
+
+        dists1 = np.array([
+            float(np.linalg.norm((working[i] - c1_unweighted[lbl1[i]]) * weights))
+            for i in range(len(working))
+        ])
+        trim_thresh = max(16.0, float(np.percentile(dists1, 88)))
+        inliers = working[dists1 <= trim_thresh]
+        if len(inliers) >= 4:
+            km2 = KMeans(n_clusters=2, n_init=15, random_state=42)
+            lbl2 = km2.fit_predict(inliers * weights)
+            centers = np.array([
+                np.mean(inliers[lbl2 == 0], axis=0) if np.any(lbl2 == 0) else c1_unweighted[0],
+                np.mean(inliers[lbl2 == 1], axis=0) if np.any(lbl2 == 1) else c1_unweighted[1],
+            ], dtype=np.float32)
+            km2.cluster_centers_ = centers
+            return km2, centers, inliers
+
+        km1.cluster_centers_ = c1_unweighted
+        return km1, c1_unweighted, working
+
     def fit_teams(self, player_bgr_colors: List[np.ndarray]):
         """
-        Fits two outfield team clusters in CIE Lab space using two-stage
-        trimmed KMeans so isolated outliers (referees / goalkeepers) do not
-        distort the team cluster centres, while preserving dark/black kits.
+        Fits two outfield team clusters in CIE Lab space using major-cluster
+        lopsidedness protection + iterative outlier trimming.
         """
         if len(player_bgr_colors) < self.n_clusters:
             raise ValueError(
@@ -120,33 +212,10 @@ class TeamColorAssigner:
             )
 
         lab_samples = self.bgr_list_to_lab(player_bgr_colors)
-
-        # Stage 1: Initial 2-cluster fit
-        km1 = KMeans(n_clusters=self.n_clusters, n_init=10, random_state=42)
-        labels1 = km1.fit_predict(lab_samples)
-        centers1 = km1.cluster_centers_
-
-        # Stage 2: Trim the furthest 12% outlier samples (refs/GKs) and refit cleanly
-        if len(lab_samples) >= 12:
-            dists1 = np.array([
-                float(np.linalg.norm(lab_samples[i] - centers1[labels1[i]]))
-                for i in range(len(lab_samples))
-            ])
-            cutoff = float(np.percentile(dists1, 88))
-            inliers = lab_samples[dists1 <= max(cutoff, 20.0)]
-            if len(inliers) >= self.n_clusters * 2:
-                km2 = KMeans(n_clusters=self.n_clusters, n_init=10, random_state=42)
-                km2.fit(inliers)
-                self.team_kmeans = km2
-                self.cluster_centers_lab = km2.cluster_centers_
-            else:
-                self.team_kmeans = km1
-                self.cluster_centers_lab = centers1
-        else:
-            self.team_kmeans = km1
-            self.cluster_centers_lab = centers1
-
-        self._finalize_clusters(lab_samples)
+        km, centers, inliers = self._fit_two_major_team_clusters(lab_samples)
+        self.team_kmeans = km
+        self.cluster_centers_lab = centers
+        self._finalize_clusters(inliers)
 
     def _finalize_clusters(self, lab_samples: np.ndarray):
         """Orders cluster centres deterministically and computes cluster spreads."""
@@ -228,27 +297,10 @@ class TeamColorAssigner:
         # Refit team clusters from clean track medians if we have enough tracks
         if len(weighted_lab_pool) >= 6:
             pool_arr = np.asarray(weighted_lab_pool, dtype=np.float32)
-            km1 = KMeans(n_clusters=2, n_init=15, random_state=42)
-            lbl1 = km1.fit_predict(pool_arr)
-            c1 = km1.cluster_centers_
-
-            # Iterative trim: drop isolated outliers (referee + GKs, furthest ~15%)
-            dists1 = np.array([
-                float(np.linalg.norm(pool_arr[i] - c1[lbl1[i]]))
-                for i in range(len(pool_arr))
-            ])
-            trim_thresh = max(18.0, float(np.percentile(dists1, 86)))
-            inliers = pool_arr[dists1 <= trim_thresh]
-            if len(inliers) >= 4:
-                km2 = KMeans(n_clusters=2, n_init=15, random_state=42)
-                km2.fit(inliers)
-                self.team_kmeans = km2
-                self.cluster_centers_lab = km2.cluster_centers_
-                self._finalize_clusters(inliers)
-            else:
-                self.team_kmeans = km1
-                self.cluster_centers_lab = c1
-                self._finalize_clusters(pool_arr)
+            km, centers, inliers = self._fit_two_major_team_clusters(pool_arr)
+            self.team_kmeans = km
+            self.cluster_centers_lab = centers
+            self._finalize_clusters(inliers)
 
         if self.cluster_centers_lab is None:
             return {tid: 0 for tid in track_positions_2d}, set()

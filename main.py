@@ -247,7 +247,8 @@ def run_pipeline(
 
         # 1a. Non-convex pitch segmentation + white near-touchline model (excludes crowd, dugouts & coaches!)
         pitch_detector.get_pitch_mask(frame)
-        pitch_detector.update_near_touchline(frame)
+        if f_idx % 3 == 0 or pitch_detector.near_touchline is None:
+            pitch_detector.update_near_touchline(frame)
         crop_bounds = pitch_detector.get_pitch_crop_bounds(frame, top_pad=55, bottom_pad=8)
         frame_y_bounds[f_idx] = pitch_detector.pitch_y_bounds
         frame_top_edges[f_idx] = (
@@ -327,6 +328,21 @@ def run_pipeline(
 
     pbar.close()
     print(f"📦 Raw pitch tracks before consolidation: {len(raw_player_tracks)}")
+
+    try:
+        import pickle
+        with open(os.path.join(output_dir, "pass1_cache.pkl"), "wb") as _cf:
+            pickle.dump({
+                "raw_player_tracks": dict(raw_player_tracks),
+                "raw_player_colors": dict(raw_player_colors),
+                "frame_warps": frame_warps,
+                "frame_y_bounds": frame_y_bounds,
+                "frame_top_edges": frame_top_edges,
+                "ball_obs": ball_tracker.observations,
+                "ball_cands": ball_tracker.all_candidates,
+            }, _cf)
+    except Exception:
+        pass
 
     # =========================================================================
     # GLOBAL POST-PROCESSING: CONSOLIDATE + TEAM/GK/REF CLASSIFY + SMOOTH BALL
@@ -468,7 +484,8 @@ def run_pipeline(
     # =========================================================================
     print("\n🎥 Pass 2/2: Rendering Annotated Match Video with GMC-Pinned Trails & White Ball Track...")
     output_video_path = os.path.join(output_dir, "analyzed_match.mp4")
-    writer = create_video_writer(output_video_path, video_info["fps"], cam_w, cam_h)
+    tmp_video_path = os.path.join(output_dir, "analyzed_match.tmp.mp4")
+    writer = create_video_writer(tmp_video_path, video_info["fps"], cam_w, cam_h)
 
     player_trails: Dict[int, deque] = defaultdict(lambda: deque(maxlen=player_trail_len))
     ball_trail: deque = deque(maxlen=ball_trail_len)
@@ -559,6 +576,8 @@ def run_pipeline(
 
     pbar2.close()
     writer.release()
+    if os.path.exists(tmp_video_path):
+        os.replace(tmp_video_path, output_video_path)
     print(f"\n🎥 Analyzed video saved to: {output_video_path}")
 
     # =========================================================================
