@@ -222,13 +222,14 @@ if 'run_btn' in locals() and run_btn:
         status_box.caption(f"{msg} ({int(pct * 100)}%)")
 
     try:
-        with st.spinner("Processing every video frame with YOLO and 2D spatial tracking..."):
+        with st.spinner("Processing every video frame with high-resolution YOLO, GMC BoT-SORT, and Ball Tracking..."):
             pipeline_res = run_pipeline(
                 video_path=target_video,
                 output_dir=output_dest,
                 max_frames=0,  # 0 = ALL FRAMES
                 model_name=selected_model_path,
-                confidence=0.35,
+                confidence=0.14,
+                imgsz=1280,
                 progress_callback=progress_callback
             )
             st.session_state["results"] = pipeline_res

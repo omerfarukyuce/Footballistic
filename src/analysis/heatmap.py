@@ -38,6 +38,11 @@ class SpatialAnalytics:
         self.player_frames: Dict[int, List[int]] = {}
         # Mapping from tracker_id to team_id (0: Team 0, 1: Team 1, -1: Ref)
         self.player_teams: Dict[int, int] = {}
+        # Explicitly identified goalkeeper tracker IDs (real or synthesized)
+        self.goalkeeper_ids: set = set()
+        # Optional tracked ball coordinates in camera & 2D pitch space
+        self.ball_track: List[Tuple[int, float, float]] = []
+        self.ball_track_2d: List[Tuple[int, float, float]] = []
         self.total_processed_frames: int = 0
 
     def add_position(
@@ -160,7 +165,18 @@ class SpatialAnalytics:
         scale_x = self.PITCH_LENGTH_M / max(1.0, self.FIELD_W)
         scale_y = self.PITCH_WIDTH_M / max(1.0, self.FIELD_H)
 
+        # Determine which side each team defends based on outfield centroids
+        team_mean_x = {}
+        for tid_check in (0, 1):
+            pts_check = self.get_2d_positions(team_id=tid_check)
+            if pts_check:
+                team_mean_x[tid_check] = float(np.mean([(p[0] - self.FIELD_X1) * scale_x for p in pts_check]))
+            else:
+                team_mean_x[tid_check] = 45.0 if tid_check == 0 else 60.0
+        left_team = 0 if team_mean_x[0] <= team_mean_x[1] else 1
+
         for team_id in (0, 1):
+            defends_left = (team_id == left_team)
             t_pids = [
                 pid for pid, tid in self.player_teams.items()
                 if tid == team_id
@@ -177,20 +193,24 @@ class SpatialAnalytics:
             else:
                 cx_m, cy_m = 52.5, 34.0
 
-            # Check if a goalkeeper exists within defending goal area
+            # Check if a goalkeeper already exists (either explicitly identified or in goal area)
             has_gk = False
             for pid in t_pids:
+                if pid in self.goalkeeper_ids:
+                    has_gk = True
+                    break
                 pts = self.player_tracks_2d.get(pid, [])
                 if pts:
                     avg_px = np.mean(pts, axis=0)
                     avg_xm = (avg_px[0] - self.FIELD_X1) * scale_x
                     avg_ym = (avg_px[1] - self.FIELD_Y1) * scale_y
-                    # Goal posts are at Y = 34m (+- 7.32m goal width). Keeper must be centered in front of goal
-                    if team_id == 0 and avg_xm <= 14.0 and abs(avg_ym - 34.0) <= 8.5:
+                    if defends_left and avg_xm <= 18.0 and abs(avg_ym - 34.0) <= 16.0:
                         has_gk = True
+                        self.goalkeeper_ids.add(pid)
                         break
-                    elif team_id == 1 and avg_xm >= 91.0 and abs(avg_ym - 34.0) <= 8.5:
+                    elif (not defends_left) and avg_xm >= 87.0 and abs(avg_ym - 34.0) <= 16.0:
                         has_gk = True
+                        self.goalkeeper_ids.add(pid)
                         break
 
             if not has_gk:
@@ -199,11 +219,11 @@ class SpatialAnalytics:
                 if gk_id in self.player_teams and self.player_teams[gk_id] != team_id:
                     gk_id = 90 + team_id
 
-                if team_id == 0:
-                    gk_xm = max(5.0, min(12.0, 5.0 + 0.10 * cx_m))
+                if defends_left:
+                    gk_xm = max(5.0, min(13.0, 5.0 + 0.10 * cx_m))
                     gk_ym = float(np.clip(34.0 + 0.12 * (cy_m - 34.0), 30.0, 38.0))
                 else:
-                    gk_xm = min(100.0, max(93.0, 100.0 - 0.10 * (105.0 - cx_m)))
+                    gk_xm = min(100.0, max(92.0, 100.0 - 0.10 * (105.0 - cx_m)))
                     gk_ym = float(np.clip(34.0 + 0.12 * (cy_m - 34.0), 30.0, 38.0))
 
                 gk_px = self.FIELD_X1 + gk_xm * (self.FIELD_W / self.PITCH_LENGTH_M)
@@ -219,6 +239,7 @@ class SpatialAnalytics:
                 self.player_tracks[gk_id] = [(100.0, 100.0)] * len(gk_tracks_2d)
                 self.player_teams[gk_id] = team_id
                 self.player_frames[gk_id] = list(range(n_frames))
+                self.goalkeeper_ids.add(gk_id)
 
             # Now strictly enforce exactly 10 outfield players + 1 GK = 11 players
             all_team_pids = [pid for pid, tid in self.player_teams.items() if tid == team_id]
@@ -232,11 +253,15 @@ class SpatialAnalytics:
                     avg_ym = (avg_px[1] - self.FIELD_Y1) * scale_y
 
                     # Reject coaches, bench staff, or linesmen standing at the touchline
-                    if avg_ym >= 65.5 or avg_ym <= 2.5 or avg_xm < 0.5 or avg_xm > 104.5:
+                    if (pid not in self.goalkeeper_ids) and (
+                        avg_ym >= 65.8 or avg_ym <= 2.0 or avg_xm < 0.5 or avg_xm > 104.5
+                    ):
                         continue
 
-                    if (team_id == 0 and avg_xm <= 14.0 and abs(avg_ym - 34.0) <= 8.5) or \
-                       (team_id == 1 and avg_xm >= 91.0 and abs(avg_ym - 34.0) <= 8.5):
+                    if pid in self.goalkeeper_ids or (
+                        (defends_left and avg_xm <= 16.5 and abs(avg_ym - 34.0) <= 14.0) or
+                        ((not defends_left) and avg_xm >= 88.5 and abs(avg_ym - 34.0) <= 14.0)
+                    ):
                         gk_pids.append(pid)
                     else:
                         outfield_pids.append(pid)
@@ -372,7 +397,12 @@ class SpatialAnalytics:
 
         # 3. Tactical Zone & Role Classification (English)
         is_gk = False
-        if tracker_id in (1, 13) or (team_id == 0 and xm <= 16.5 and abs(ym - 34.0) <= 16.0) or (team_id == 1 and xm >= 88.5 and abs(ym - 34.0) <= 16.0):
+        if (
+            tracker_id in self.goalkeeper_ids
+            or tracker_id in (1, 13)
+            or (xm <= 16.5 and abs(ym - 34.0) <= 16.0)
+            or (xm >= 88.5 and abs(ym - 34.0) <= 16.0)
+        ):
             is_gk = True
             tactical_role = "Goalkeeper (GK) • Goal Area"
         else:
@@ -585,9 +615,12 @@ class SpatialAnalytics:
             "height": self.height,
             "total_processed_frames": self.total_processed_frames,
             "player_teams": {str(k): int(v) for k, v in self.player_teams.items()},
+            "goalkeeper_ids": sorted(int(g) for g in self.goalkeeper_ids),
             "player_tracks": {str(k): [[float(p[0]), float(p[1])] for p in v] for k, v in self.player_tracks.items()},
             "player_tracks_2d": {str(k): [[float(p[0]), float(p[1])] for p in v] for k, v in self.player_tracks_2d.items()},
             "player_frames": {str(k): [int(f) for f in v] for k, v in self.player_frames.items()},
+            "ball_track": [[int(f), float(x), float(y)] for f, x, y in self.ball_track],
+            "ball_track_2d": [[int(f), float(x), float(y)] for f, x, y in self.ball_track_2d],
         }
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f)
@@ -604,6 +637,7 @@ class SpatialAnalytics:
         instance = cls(frame_width=data.get("width", 1920), frame_height=data.get("height", 1080))
         instance.total_processed_frames = data.get("total_processed_frames", 0)
         instance.player_teams = {int(k): int(v) for k, v in data.get("player_teams", {}).items()}
+        instance.goalkeeper_ids = {int(g) for g in data.get("goalkeeper_ids", [])}
         instance.player_tracks = {
             int(k): [(float(p[0]), float(p[1])) for p in v]
             for k, v in data.get("player_tracks", {}).items()
@@ -616,4 +650,12 @@ class SpatialAnalytics:
             int(k): [int(f) for f in v]
             for k, v in data.get("player_frames", {}).items()
         }
+        instance.ball_track = [
+            (int(p[0]), float(p[1]), float(p[2]))
+            for p in data.get("ball_track", [])
+        ]
+        instance.ball_track_2d = [
+            (int(p[0]), float(p[1]), float(p[2]))
+            for p in data.get("ball_track_2d", [])
+        ]
         return instance

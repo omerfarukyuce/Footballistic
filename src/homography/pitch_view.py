@@ -116,26 +116,36 @@ class PitchView2D:
         cam_x: float,
         cam_y: float,
         cam_w: int = 1920,
-        cam_h: int = 1080
+        cam_h: int = 1080,
+        pitch_y_bounds: Optional[Tuple[int, int]] = None
     ) -> Tuple[float, float]:
         """
         Maps perspective camera coordinates to the flat 2D top-down rectangular pitch.
-        Compensates for perspective trapezoid compression (top of field is narrower in pixels).
+        Uses a projective foreshortening curve in Y (because the far half of a broadcast
+        pitch compresses into ~30-35% of vertical image pixels) plus trapezoid width
+        compensation in X.
         """
-        # Tactical camera bounding bounds in pixel space (DFL / Bundesliga wide cam)
-        y_top = cam_h * 0.28
-        y_bottom = cam_h * 0.95
-        
-        y_norm = np.clip((cam_y - y_top) / max(1.0, (y_bottom - y_top)), 0.0, 1.0)
+        if pitch_y_bounds is not None and (pitch_y_bounds[1] - pitch_y_bounds[0]) > cam_h * 0.25:
+            y_top = float(pitch_y_bounds[0])
+            y_bottom = float(min(pitch_y_bounds[1], cam_h * 0.96))
+        else:
+            y_top = cam_h * 0.27
+            y_bottom = cam_h * 0.95
 
-        # Perspective trapezoid width expansion from top to bottom
-        w_top = cam_w * 0.88
-        w_bottom = cam_w * 1.15
+        u = float(np.clip((cam_y - y_top) / max(1.0, (y_bottom - y_top)), 0.0, 1.0))
+
+        # Projective foreshortening warp: maps center-of-pitch (~28% down in pixels) to 0.50
+        persp_k = 1.75
+        y_norm = float(np.clip(((1.0 + persp_k) * u) / (1.0 + persp_k * u), 0.0, 1.0))
+
+        # Perspective trapezoid width expansion from far touchline to near touchline
+        w_top = cam_w * 0.86
+        w_bottom = cam_w * 1.18
         current_w = w_top + y_norm * (w_bottom - w_top)
         center_x = cam_w * 0.50
 
         x_norm = 0.5 + (cam_x - center_x) / max(1.0, current_w)
-        x_norm = np.clip(x_norm, 0.0, 1.0)
+        x_norm = float(np.clip(x_norm, 0.0, 1.0))
 
         pitch_2d_x = self.field_x1 + x_norm * self.field_w
         pitch_2d_y = self.field_y1 + y_norm * self.field_h

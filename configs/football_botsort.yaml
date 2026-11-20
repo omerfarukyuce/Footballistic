@@ -1,0 +1,22 @@
+# BoT-SORT optimized for wide-angle & broadcast football tracking.
+# - gmc_method: sparseOptFlow compensates for fast camera pans/zooms before matching.
+# - track_buffer: 120 (~4.8s at 25fps) keeps occluded/off-screen players alive.
+# - track_high_thresh: 0.22 & track_low_thresh: 0.08 catch distant far-touchline players.
+# - match_thresh: 0.85 gives generous IoU matching, backed by our Stage-3 center+Lab ReID.
+
+tracker_type: botsort
+track_high_thresh: 0.22
+track_low_thresh: 0.08
+new_track_thresh: 0.25
+track_buffer: 120
+match_thresh: 0.85
+fuse_score: True
+
+# Camera Motion Compensation (crucial for broadcast camera pans)
+gmc_method: sparseOptFlow
+
+# Native ReID disabled here (handled by our dedicated football Lab-jersey Stage-3 matcher)
+proximity_thresh: 0.5
+appearance_thresh: 0.8
+with_reid: False
+model: auto
