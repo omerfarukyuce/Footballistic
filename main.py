@@ -49,6 +49,7 @@ from src.tracking.football_tracker import (
 )
 from src.tracking.ball_tracker import BallTracker
 from src.analysis.heatmap import SpatialAnalytics
+from src.analysis.events import MatchEventEngine
 from src.homography.pitch_view import PitchView2D
 from src.utils.video_utils import VideoHandler, create_video_writer
 from src.utils.drawing import TacticalVisualizer
@@ -623,11 +624,38 @@ def run_pipeline(
     pitch_2d_all_path = os.path.join(output_dir, "pitch_2d_heatmap_all.png")
     cv2.imwrite(pitch_2d_all_path, pitch_2d_all_img)
 
+    # Phase 2: Passing Networks, Ball Possession & Match Event Spotting
+    event_engine = MatchEventEngine(spatial_analytics, fps=video_info["fps"])
+    poss = event_engine.get_possession_summary()
+    net_t0 = event_engine.get_passing_network(0)
+    net_t1 = event_engine.get_passing_network(1)
+
+    pass_net_t0_img = pitch_view.draw_2d_passing_network(0, net_t0, spatial_analytics.goalkeeper_ids)
+    pass_net_t0_path = os.path.join(output_dir, "pitch_2d_passing_network_team0.png")
+    cv2.imwrite(pass_net_t0_path, pass_net_t0_img)
+
+    pass_net_t1_img = pitch_view.draw_2d_passing_network(1, net_t1, spatial_analytics.goalkeeper_ids)
+    pass_net_t1_path = os.path.join(output_dir, "pitch_2d_passing_network_team1.png")
+    cv2.imwrite(pass_net_t1_path, pass_net_t1_img)
+
+    events_map_img = pitch_view.draw_2d_events_map(
+        event_engine.passes,
+        event_engine.interceptions,
+        carries=event_engine.carries_and_entries,
+        shots=event_engine.shots
+    )
+    events_map_path = os.path.join(output_dir, "pitch_2d_events_map.png")
+    cv2.imwrite(events_map_path, events_map_img)
+
     # Save spatial dataset to JSON for instant dashboard reloading
     spatial_data_path = os.path.join(output_dir, "spatial_data.json")
     spatial_analytics.save_to_json(spatial_data_path)
 
-    print(f"📊 2D Rectangular Heatmaps & Formations saved to {output_dir}")
+    print(f"📊 2D Rectangular Heatmaps, Formations & Passing Networks saved to {output_dir}")
+    print(
+        f"⚡ Possession: Team 0 {poss['team0_possession_pct']}% vs Team 1 {poss['team1_possession_pct']}% | "
+        f"Passes: {poss['total_passes']} | Recoveries: {poss['total_recoveries']}"
+    )
     print(f"✅ Total unique players tracked: {len(avg_positions)} (11 vs 11 FIFA Standard)")
     print("=" * 64)
     print("🎉 Pipeline Completed Successfully!")

@@ -29,11 +29,11 @@ Traditional match analytics (e.g., Opta, StatsBomb) rely heavily on human annota
 - [x] **2D Bird's-Eye Pitch Mapping & Spatial Analytics:** Projective perspective foreshortening onto a standard $105\text{m} \times 68\text{m}$ pitch, Gaussian KDE heatmaps, convex-hull tactical shapes, team compactness/centroids, and strict 11v11 formations
 - [x] **2-Pass Broadcast Video Renderer:** Globally consistent team colors, stable player IDs, GMC-pinned player & white ball trails encoded to web-ready H.264
 
-### 📍 Phase 2: Event Detection & Passing Intelligence (Next Up)
-- [ ] **Ball Possession Engine:** Frame-by-frame dynamic player & team ball ownership, possession percentage (`%`), continuous possession timeline, and team control spells
-- [ ] **Passing Network & Pass Matrix:** Automatic completed pass detection (same-team possession transfers), progressive & key pass tagging, pass length/direction stats, and a 2D bird's-eye **Passing Network** graph (node size = touches, edge weight = pass volume)
-- [ ] **Turnovers, Interceptions & Recoveries:** Opponent possession transitions, ball-winner attribution, and high-turnover zone mapping
-- [ ] **Shots, Crosses & Final-Third / Box Entries:** High-velocity goal-mouth ball vector spotting, flank crosses, and penalty-area entries
+### 📍 Phase 2: Event Detection & Passing Intelligence ✅ (Completed)
+- [x] **Ball Possession Engine:** Frame-by-frame dynamic player & team ball ownership, possession percentage (`%`), continuous possession timeline, and team control spells
+- [x] **Passing Network & Pass Matrix:** Automatic completed pass detection (same-team possession transfers), progressive & key pass tagging, pass length/direction stats, and a 2D bird's-eye **Passing Network** graph (node size = touches, edge weight = pass volume)
+- [x] **Turnovers, Interceptions & Recoveries:** Opponent possession transitions, ball-winner attribution, and high-turnover zone mapping
+- [x] **Shots, Crosses & Final-Third / Box Entries:** High-velocity goal-mouth ball vector spotting, flank crosses, and penalty-area entries
 
 ### 📍 Phase 3: Advanced Physical & Tactical Metrics
 - [x] **Core Physical Metrics:** Estimated distance covered (`m`), average speed (`km/h`), pitch presence (`%`), and tactical third/channel distribution per player
@@ -42,7 +42,7 @@ Traditional match analytics (e.g., Opta, StatsBomb) rely heavily on human annota
 
 ### 📍 Phase 4: Interactive Tactical Match Center
 - [x] **Minimalist Streamlit Studio (`app.py`):** Instant pre-computed dual-match loader, model switcher (`YOLO11` / `YOLOv8`), custom video upload, Team Analytics, Player Deep-Dive, H.264 annotated replay, and CSV export
-- [ ] **Event & Passing Network Tab:** Interactive passing network canvas, possession timeline charts, and filterable match event log
+- [x] **Event & Passing Network Tab:** Interactive passing network canvas, dual-team possession split bar, 2D action vector map, and chronological match event log
 - [ ] **Automated Match Report Export:** One-click printable HTML / PDF scouting report summarizing formations, heatmaps, passing networks, and KPIs
 
 ### 📍 Phase 5: Pro-Grade Calibration (Future Stretch)

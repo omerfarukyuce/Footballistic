@@ -453,3 +453,193 @@ class PitchView2D:
         cv2.putText(canvas, "End", (end_pt[0] + 8, end_pt[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
 
         return canvas
+
+    def draw_2d_passing_network(
+        self,
+        team_id: int,
+        network_data: Dict,
+        goalkeeper_ids: Optional[set] = None
+    ) -> np.ndarray:
+        """
+        Draws a 2D Bird's-Eye Passing Network for `team_id`:
+          - Edges: weighted passing lanes between teammates (thickness scaled by pass count,
+            highlighted in gold/cyan when containing progressive passes, with directional arrowheads).
+          - Nodes: player average positions scaled by ball touches / involvement.
+        """
+        canvas = self.base_pitch.copy()
+        primary_color = (35, 45, 235) if team_id == 0 else (235, 130, 25)
+        edge_base_color = (120, 145, 255) if team_id == 0 else (255, 195, 90)
+        prog_edge_color = (40, 225, 255)  # Gold/yellow highlight for progressive links
+
+        nodes = network_data.get("nodes", {})
+        edges = network_data.get("edges", [])
+        if not nodes:
+            return canvas
+
+        gk_set = goalkeeper_ids or {1, 13}
+
+        # 1. Draw subtle convex hull background of team shape
+        pts_arr = np.array([n["pos_2d"] for n in nodes.values()], dtype=np.float32)
+        if len(pts_arr) >= 3:
+            hull = cv2.convexHull(np.int32(pts_arr))
+            overlay = canvas.copy()
+            cv2.drawContours(overlay, [hull], 0, primary_color, -1, cv2.LINE_AA)
+            cv2.addWeighted(overlay, 0.10, canvas, 0.90, 0, canvas)
+
+        # 2. Draw Passing Network Edges (passing lanes)
+        link_overlay = canvas.copy()
+        for ed in edges:
+            u, v = ed["pair"]
+            if u not in nodes or v not in nodes:
+                continue
+            p1 = (int(round(nodes[u]["pos_2d"][0])), int(round(nodes[u]["pos_2d"][1])))
+            p2 = (int(round(nodes[v]["pos_2d"][0])), int(round(nodes[v]["pos_2d"][1])))
+            cnt = ed["count"]
+            is_prog = ed.get("progressive", 0) > 0
+
+            thickness = int(np.clip(2 + cnt * 1.6, 2, 10))
+            col = prog_edge_color if is_prog else edge_base_color
+
+            # Dark contrast casing + glowing link
+            cv2.line(link_overlay, p1, p2, (15, 15, 15), thickness + 3, cv2.LINE_AA)
+            cv2.line(link_overlay, p1, p2, col, thickness, cv2.LINE_AA)
+
+            # Directional arrowhead toward dominant receiver along the link
+            src, dst = (p1, p2) if ed["a_to_b"] >= ed["b_to_a"] else (p2, p1)
+            mx = int(round(src[0] + 0.62 * (dst[0] - src[0])))
+            my = int(round(src[1] + 0.62 * (dst[1] - src[1])))
+            ang = np.arctan2(dst[1] - src[1], dst[0] - src[0])
+            ah = 7 + min(5, cnt)
+            a1 = (int(round(mx - ah * np.cos(ang - 0.55))), int(round(my - ah * np.sin(ang - 0.55))))
+            a2 = (int(round(mx - ah * np.cos(ang + 0.55))), int(round(my - ah * np.sin(ang + 0.55))))
+            tri = np.array([[mx, my], a1, a2], dtype=np.int32)
+            cv2.drawContours(link_overlay, [tri], 0, (15, 15, 15), 2, cv2.LINE_AA)
+            cv2.drawContours(link_overlay, [tri], 0, col, -1, cv2.LINE_AA)
+
+            # Pass count pill on multi-pass links
+            if cnt >= 2:
+                cx_m = (p1[0] + p2[0]) // 2
+                cy_m = (p1[1] + p2[1]) // 2
+                cv2.circle(link_overlay, (cx_m, cy_m), 9, (18, 22, 30), -1, cv2.LINE_AA)
+                cv2.circle(link_overlay, (cx_m, cy_m), 9, col, 1, cv2.LINE_AA)
+                lbl = str(cnt)
+                (lw, lh), _ = cv2.getTextSize(lbl, cv2.FONT_HERSHEY_SIMPLEX, 0.36, 1)
+                cv2.putText(
+                    link_overlay, lbl, (cx_m - lw // 2, cy_m + lh // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 255, 255), 1, cv2.LINE_AA
+                )
+
+        cv2.addWeighted(link_overlay, 0.85, canvas, 0.15, 0, canvas)
+
+        # 3. Draw Player Nodes (radius scaled by touch involvement)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        for pid, info in nodes.items():
+            center = (int(round(info["pos_2d"][0])), int(round(info["pos_2d"][1])))
+            touches = info.get("touches", 1)
+            passes_made = info.get("passes_made", 0)
+            radius = int(np.clip(12 + touches * 1.1 + passes_made * 0.8, 13, 22))
+            is_gk = (pid in gk_set) or (pid in (1, 13))
+
+            if is_gk:
+                cv2.circle(canvas, center, radius + 4, (30, 215, 255), 2, cv2.LINE_AA)
+            cv2.circle(canvas, center, radius + 2, (15, 15, 15), -1, cv2.LINE_AA)
+            cv2.circle(canvas, center, radius, primary_color, -1, cv2.LINE_AA)
+            if passes_made > 0:
+                cv2.circle(canvas, center, radius, (245, 245, 245), 1, cv2.LINE_AA)
+
+            label = "GK" if is_gk else str(pid)
+            font_s = 0.38 if is_gk else 0.42
+            (tw, th), _ = cv2.getTextSize(label, font, font_s, 1)
+            cv2.putText(
+                canvas, label, (center[0] - tw // 2, center[1] + th // 2),
+                font, font_s, (255, 255, 255), 1, cv2.LINE_AA
+            )
+
+        return canvas
+
+    def draw_2d_events_map(
+        self,
+        passes: List[Dict],
+        interceptions: List[Dict],
+        carries: Optional[List[Dict]] = None,
+        shots: Optional[List[Dict]] = None,
+        team_filter: Optional[int] = None
+    ) -> np.ndarray:
+        """
+        Draws all match action vectors on the 2D pitch:
+          - Completed Passes: directional arrows (Gold/Cyan for Progressive / Box Entry passes)
+          - Progressive / Box Carries: dashed/accented movement vectors
+          - Interceptions & Ball Recoveries: crisp diamond/ring markers at recovery point
+          - Shots: bold white/gold goal-bound arrows
+        """
+        canvas = self.base_pitch.copy()
+        overlay = canvas.copy()
+
+        team_colors = {
+            0: (45, 65, 245),     # Team 0: Red
+            1: (245, 145, 35),    # Team 1: Blue
+        }
+        prog_color = (40, 230, 255)  # Bright Gold for progressive / key actions
+        rec_color = (120, 255, 120)  # Bright Emerald for ball recoveries
+
+        # 1. Draw Completed Pass Vectors
+        for p in passes:
+            tid = p["team_id"]
+            if team_filter is not None and tid != team_filter:
+                continue
+            p1 = (int(round(p["start_2d"][0])), int(round(p["start_2d"][1])))
+            p2 = (int(round(p["end_2d"][0])), int(round(p["end_2d"][1])))
+            is_key = p.get("is_progressive") or p.get("is_box_entry") or p.get("is_final_third_entry")
+            col = prog_color if is_key else team_colors.get(tid, (220, 220, 220))
+            thick = 3 if is_key else 2
+
+            cv2.arrowedLine(overlay, p1, p2, (15, 15, 15), thick + 2, cv2.LINE_AA, tipLength=0.14)
+            cv2.arrowedLine(overlay, p1, p2, col, thick, cv2.LINE_AA, tipLength=0.14)
+            cv2.circle(overlay, p1, 4, col, -1, cv2.LINE_AA)
+
+        # 2. Draw Progressive / Box Carries
+        for c in (carries or []):
+            tid = c["team_id"]
+            if team_filter is not None and tid != team_filter:
+                continue
+            p1 = (int(round(c["start_2d"][0])), int(round(c["start_2d"][1])))
+            p2 = (int(round(c["end_2d"][0])), int(round(c["end_2d"][1])))
+            cv2.arrowedLine(overlay, p1, p2, (20, 20, 20), 3, cv2.LINE_AA, tipLength=0.16)
+            cv2.arrowedLine(overlay, p1, p2, (255, 220, 180), 2, cv2.LINE_AA, tipLength=0.16)
+
+        # 3. Draw Shots
+        for sh in (shots or []):
+            tid = sh["team_id"]
+            if team_filter is not None and tid != team_filter:
+                continue
+            p1 = (int(round(sh["start_2d"][0])), int(round(sh["start_2d"][1])))
+            p2 = (int(round(sh["end_2d"][0])), int(round(sh["end_2d"][1])))
+            cv2.arrowedLine(overlay, p1, p2, (10, 10, 10), 6, cv2.LINE_AA, tipLength=0.18)
+            cv2.arrowedLine(overlay, p1, p2, (255, 255, 255), 4, cv2.LINE_AA, tipLength=0.18)
+
+        # 4. Draw Interceptions & Ball Recoveries
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        for r in interceptions:
+            tid = r["team_id"]
+            if team_filter is not None and tid != team_filter:
+                continue
+            pt = (int(round(r["end_2d"][0])), int(round(r["end_2d"][1])))
+            t_col = team_colors.get(tid, rec_color)
+
+            # Diamond recovery marker
+            d_sz = 9
+            diamond = np.array([
+                [pt[0], pt[1] - d_sz],
+                [pt[0] + d_sz, pt[1]],
+                [pt[0], pt[1] + d_sz],
+                [pt[0] - d_sz, pt[1]]
+            ], dtype=np.int32)
+            cv2.drawContours(overlay, [diamond], 0, (15, 15, 15), 3, cv2.LINE_AA)
+            cv2.drawContours(overlay, [diamond], 0, rec_color, -1, cv2.LINE_AA)
+            cv2.circle(overlay, pt, 4, t_col, -1, cv2.LINE_AA)
+
+            lbl = f"#{r['player_id']}"
+            cv2.putText(overlay, lbl, (pt[0] + 10, pt[1] + 4), font, 0.36, (255, 255, 255), 1, cv2.LINE_AA)
+
+        cv2.addWeighted(overlay, 0.88, canvas, 0.12, 0, canvas)
+        return canvas

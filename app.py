@@ -14,6 +14,7 @@ import numpy as np
 
 from main import run_pipeline
 from src.analysis.heatmap import SpatialAnalytics
+from src.analysis.events import MatchEventEngine
 from src.homography.pitch_view import PitchView2D
 
 # ----------------- PAGE CONFIG -----------------
@@ -251,8 +252,9 @@ spatial_analytics: SpatialAnalytics = results["spatial_analytics"]
 pitch_view: PitchView2D = results.get("pitch_view") or PitchView2D(1050, 680)
 
 # Minimal Tabs - TEAM VIEW FIRST AS DEFAULT
-tab_team, tab_player, tab_media = st.tabs([
+tab_team, tab_events, tab_player, tab_media = st.tabs([
     "🛡️ Team Analytics",
+    "⚡ Passing & Match Events",
     "🎯 Player Deep-Dive",
     "🎬 Match Video & Data"
 ])
@@ -346,7 +348,133 @@ with tab_team:
 
 
 # -------------------------------------------------------------
-# TAB 2: PLAYER DEEP-DIVE ANALYTICS
+# TAB 2: PASSING NETWORK, BALL POSSESSION & MATCH EVENTS (PHASE 2)
+# -------------------------------------------------------------
+with tab_events:
+    event_engine = MatchEventEngine(spatial_analytics, fps=25.0)
+    poss = event_engine.get_possession_summary()
+
+    ev_view_mode = st.radio(
+        "Select Passing & Events Focus:",
+        ["🔴 Team 0 (Home)", "🔵 Team 1 (Away)", "🆚 Full Match Comparison"],
+        horizontal=True,
+        key="events_team_radio"
+    )
+
+    p0 = poss["team0_possession_pct"]
+    p1 = poss["team1_possession_pct"]
+
+    # Sleek Dual-Team Possession Bar
+    st.markdown(f"""
+    <div style="background:#111827; border:1px solid #1F2937; border-radius:8px; padding:12px 16px; margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; font-size:0.84rem; font-weight:600; color:#E5E7EB; margin-bottom:6px;">
+            <span>🔴 Team 0 Possession: {p0}% ({poss['team0_possession_sec']}s • {poss['team0_touches']} touches)</span>
+            <span>🔵 Team 1 Possession: {p1}% ({poss['team1_possession_sec']}s • {poss['team1_touches']} touches)</span>
+        </div>
+        <div style="display:flex; width:100%; height:10px; border-radius:6px; overflow:hidden; background:#1F2937;">
+            <div style="width:{p0}%; background:linear-gradient(90deg, #DC2626, #EF4444);"></div>
+            <div style="width:{p1}%; background:linear-gradient(90deg, #2563EB, #3B82F6);"></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    e1, e2, e3, e4 = st.columns(4)
+    if "Comparative" in ev_view_mode or "Full Match" in ev_view_mode:
+        with e1:
+            st.metric("Possession Split", f"{p0}% vs {p1}%")
+        with e2:
+            prog_tot = poss["team0_progressive_passes"] + poss["team1_progressive_passes"]
+            st.metric("Completed Passes", f"{poss['total_passes']} ({prog_tot} Prog.)")
+        with e3:
+            st.metric("Ball Recoveries", f"{poss['total_recoveries']} Turnovers")
+        with e4:
+            ent_tot = poss["team0_attacking_entries"] + poss["team1_attacking_entries"]
+            st.metric("3rd / Box Entries", f"{ent_tot} Entries")
+
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        ec1, ec2 = st.columns(2)
+        with ec1:
+            st.markdown("##### 🕸️ Team 0 vs Team 1 Passing Networks")
+            net_choice = st.segmented_control(
+                "Network Overlay",
+                ["🔴 Team 0 Network", "🔵 Team 1 Network"],
+                default="🔴 Team 0 Network",
+                label_visibility="collapsed"
+            ) if hasattr(st, "segmented_control") else "🔴 Team 0 Network"
+            net_tid = 0 if (net_choice is None or "Team 0" in str(net_choice)) else 1
+            net_img = pitch_view.draw_2d_passing_network(
+                net_tid,
+                event_engine.get_passing_network(net_tid),
+                spatial_analytics.goalkeeper_ids
+            )
+            st.image(cv2.cvtColor(net_img, cv2.COLOR_BGR2RGB), use_column_width=True)
+
+        with ec2:
+            st.markdown("##### ⚡ 2D Pass Vectors, Progressive Passes & Recoveries (All)")
+            ev_map_img = pitch_view.draw_2d_events_map(
+                event_engine.passes,
+                event_engine.interceptions,
+                carries=event_engine.carries_and_entries,
+                shots=event_engine.shots,
+                team_filter=None
+            )
+            st.image(cv2.cvtColor(ev_map_img, cv2.COLOR_BGR2RGB), use_column_width=True)
+
+    else:
+        ev_tid = 0 if "Team 0" in ev_view_mode else 1
+        t_poss = p0 if ev_tid == 0 else p1
+        t_passes = poss["team0_passes"] if ev_tid == 0 else poss["team1_passes"]
+        t_prog = poss["team0_progressive_passes"] if ev_tid == 0 else poss["team1_progressive_passes"]
+        t_rec = poss["team0_recoveries"] if ev_tid == 0 else poss["team1_recoveries"]
+        t_ent = poss["team0_attacking_entries"] if ev_tid == 0 else poss["team1_attacking_entries"]
+
+        with e1:
+            st.metric(f"Team {ev_tid} Possession", f"{t_poss}%")
+        with e2:
+            st.metric("Completed Passes", f"{t_passes} ({t_prog} Prog.)")
+        with e3:
+            st.metric("Ball Recoveries", f"{t_rec} Won")
+        with e4:
+            st.metric("3rd / Box Entries", f"{t_ent} Entries")
+
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+        ec1, ec2 = st.columns(2)
+        with ec1:
+            st.markdown(f"##### 🕸️ Team {ev_tid} 2D Passing Network (Node Size = Touches)")
+            net_img = pitch_view.draw_2d_passing_network(
+                ev_tid,
+                event_engine.get_passing_network(ev_tid),
+                spatial_analytics.goalkeeper_ids
+            )
+            st.image(cv2.cvtColor(net_img, cv2.COLOR_BGR2RGB), use_column_width=True)
+
+        with ec2:
+            st.markdown(f"##### ⚡ Team {ev_tid} Pass Vectors, Carries & Ball Recoveries")
+            ev_map_img = pitch_view.draw_2d_events_map(
+                event_engine.passes,
+                event_engine.interceptions,
+                carries=event_engine.carries_and_entries,
+                shots=event_engine.shots,
+                team_filter=ev_tid
+            )
+            st.image(cv2.cvtColor(ev_map_img, cv2.COLOR_BGR2RGB), use_column_width=True)
+
+    st.caption(
+        "🟡 **Gold Lanes / Arrows:** Progressive Passes & Penalty-Box Entries &nbsp;•&nbsp; "
+        "🟢 **Green Diamonds:** Ball Recoveries & Interceptions &nbsp;•&nbsp; "
+        "⚪ **Node Radius:** Scaled by Ball Touches & Passing Volume"
+    )
+
+    # Chronological Event Log Table
+    ev_rows = event_engine.get_event_log_table()
+    if ev_rows:
+        st.markdown("##### 📋 Chronological Match Event & Action Log")
+        ev_df = pd.DataFrame(ev_rows)
+        st.dataframe(ev_df, use_container_width=True, height=230)
+
+
+# -------------------------------------------------------------
+# TAB 3: PLAYER DEEP-DIVE ANALYTICS
 # -------------------------------------------------------------
 with tab_player:
     # Filter players respecting squad limits and presence
