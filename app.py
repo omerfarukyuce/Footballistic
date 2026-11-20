@@ -348,19 +348,11 @@ with tab_team:
 
 
 # -------------------------------------------------------------
-# TAB 2: PASSING NETWORK, BALL POSSESSION & MATCH EVENTS (PHASE 2)
+# TAB 2: INDIVIDUAL PASS BREAKDOWN, BALL POSSESSION & EVENTS (PHASE 2)
 # -------------------------------------------------------------
 with tab_events:
     event_engine = MatchEventEngine(spatial_analytics, fps=25.0)
     poss = event_engine.get_possession_summary()
-
-    ev_view_mode = st.radio(
-        "Select Passing & Events Focus:",
-        ["🔴 Team 0 (Home)", "🔵 Team 1 (Away)", "🆚 Full Match Comparison"],
-        horizontal=True,
-        key="events_team_radio"
-    )
-
     p0 = poss["team0_possession_pct"]
     p1 = poss["team1_possession_pct"]
 
@@ -368,8 +360,8 @@ with tab_events:
     st.markdown(f"""
     <div style="background:#111827; border:1px solid #1F2937; border-radius:8px; padding:12px 16px; margin-bottom:12px;">
         <div style="display:flex; justify-content:space-between; font-size:0.84rem; font-weight:600; color:#E5E7EB; margin-bottom:6px;">
-            <span>🔴 Team 0 Possession: {p0}% ({poss['team0_possession_sec']}s • {poss['team0_touches']} touches)</span>
-            <span>🔵 Team 1 Possession: {p1}% ({poss['team1_possession_sec']}s • {poss['team1_touches']} touches)</span>
+            <span>🔴 Team 0 Possession: {p0}% ({poss['team0_possession_sec']}s • {poss['team0_passes']}/{poss['team0_passes_attempted']} passes)</span>
+            <span>🔵 Team 1 Possession: {p1}% ({poss['team1_possession_sec']}s • {poss['team1_passes']}/{poss['team1_passes_attempted']} passes)</span>
         </div>
         <div style="display:flex; width:100%; height:10px; border-radius:6px; overflow:hidden; background:#1F2937;">
             <div style="width:{p0}%; background:linear-gradient(90deg, #DC2626, #EF4444);"></div>
@@ -378,39 +370,115 @@ with tab_events:
     </div>
     """, unsafe_allow_html=True)
 
+    # Top Match Pass KPIs
     e1, e2, e3, e4 = st.columns(4)
-    if "Comparative" in ev_view_mode or "Full Match" in ev_view_mode:
-        with e1:
-            st.metric("Possession Split", f"{p0}% vs {p1}%")
-        with e2:
-            prog_tot = poss["team0_progressive_passes"] + poss["team1_progressive_passes"]
-            st.metric("Completed Passes", f"{poss['total_passes']} ({prog_tot} Prog.)")
-        with e3:
-            st.metric("Ball Recoveries", f"{poss['total_recoveries']} Turnovers")
-        with e4:
-            ent_tot = poss["team0_attacking_entries"] + poss["team1_attacking_entries"]
-            st.metric("3rd / Box Entries", f"{ent_tot} Entries")
+    with e1:
+        st.metric("Total Passes", f"{poss['total_passes']} / {poss['total_passes_attempted']}", help="Completed / Attempted passes")
+    with e2:
+        st.metric("Pass Accuracy", f"{poss['total_pass_accuracy']}%", help=f"Completed: {poss['total_passes']} | Incomplete: {poss['total_incomplete_passes']}")
+    with e3:
+        st.metric("Avg Pass Length", f"{poss['avg_pass_length_m']} m", help="Calibrated on FIFA 105m x 68m perspective pitch")
+    with e4:
+        st.metric("Avg Ball Speed", f"{poss['avg_pass_speed_kmh']} km/h", help="Computed from exact kick-to-reception flight duration")
 
-        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-        ec1, ec2 = st.columns(2)
-        with ec1:
-            st.markdown("##### 🕸️ Team 0 vs Team 1 Passing Networks")
-            net_choice = st.segmented_control(
-                "Network Overlay",
-                ["🔴 Team 0 Network", "🔵 Team 1 Network"],
-                default="🔴 Team 0 Network",
-                label_visibility="collapsed"
-            ) if hasattr(st, "segmented_control") else "🔴 Team 0 Network"
-            net_tid = 0 if (net_choice is None or "Team 0" in str(net_choice)) else 1
-            net_img = pitch_view.draw_2d_passing_network(
-                net_tid,
-                event_engine.get_passing_network(net_tid),
-                spatial_analytics.goalkeeper_ids
+    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
+
+    # ---------------- INDIVIDUAL PASS FREEZE-FRAME INSPECTOR ----------------
+    st.markdown("##### 🎯 Pass-by-Pass 2D Tactical Breakdown (1 Visual per Pass)")
+
+    all_passes = event_engine.all_passes
+    if not all_passes:
+        st.info("No passes detected in this clip.")
+    else:
+        pf1, pf2, pf3 = st.columns([1.2, 1.2, 2.6])
+        with pf1:
+            pass_team_filter = st.selectbox(
+                "Filter Team:",
+                ["All Teams", "🔴 Team 0 (Home)", "🔵 Team 1 (Away)"],
+                key="pass_team_filter"
             )
-            st.image(cv2.cvtColor(net_img, cv2.COLOR_BGR2RGB), use_column_width=True)
+        with pf2:
+            pass_outcome_filter = st.selectbox(
+                "Outcome:",
+                ["All Outcomes", "✅ Completed Only", "❌ Incomplete Only"],
+                key="pass_outcome_filter"
+            )
 
-        with ec2:
-            st.markdown("##### ⚡ 2D Pass Vectors, Progressive Passes & Recoveries (All)")
+        filtered_passes = [
+            p for p in all_passes
+            if (pass_team_filter == "All Teams" or (p["team_id"] == 0 and "Team 0" in pass_team_filter) or (p["team_id"] == 1 and "Team 1" in pass_team_filter))
+            and (pass_outcome_filter == "All Outcomes" or (p["is_completed"] and "Completed" in pass_outcome_filter) or ((not p["is_completed"]) and "Incomplete" in pass_outcome_filter))
+        ]
+
+        if not filtered_passes:
+            st.warning("No passes match the selected filter.")
+        else:
+            def _fmt_pass(p):
+                icon = "✅" if p["is_completed"] else "❌"
+                arrow = f"#{p['player_id']} → #{p['target_id']}" if p["is_completed"] else f"#{p['player_id']} ✕ #{p['target_id']}"
+                return f"Pass #{p['pass_number']} ({p['time_sec']:.1f}s) • Team {p['team_id']} {arrow} • {icon} {p['outcome']} • {p['length_m']}m • {p['avg_speed_kmh']} km/h"
+
+            with pf3:
+                selected_pass = st.selectbox(
+                    "Select Pass to Inspect:",
+                    filtered_passes,
+                    format_func=_fmt_pass,
+                    key="selected_single_pass"
+                )
+
+            # Main Visual Row: Left = Full 2D Single-Pass Freeze-Frame, Right = Real Broadcast Frame + Telemetry
+            col_p2d, col_pinfo = st.columns([1.65, 1.0])
+            with col_p2d:
+                single_pass_img = pitch_view.draw_2d_single_pass(selected_pass)
+                st.image(cv2.cvtColor(single_pass_img, cv2.COLOR_BGR2RGB), use_column_width=True)
+
+            with col_pinfo:
+                outcome_badge = "🟢 **COMPLETED PASS**" if selected_pass["is_completed"] else "🔴 **INCOMPLETE / INTERCEPTED**"
+                st.markdown(f"###### Pass #{selected_pass['pass_number']} Telemetry — {outcome_badge}")
+
+                m_r1c1, m_r1c2 = st.columns(2)
+                with m_r1c1:
+                    st.metric("Pass Length", f"{selected_pass['length_m']} m", help=f"Flight arc: {selected_pass['arc_length_m']} m")
+                with m_r1c2:
+                    st.metric("Avg Speed", f"{selected_pass['avg_speed_kmh']} km/h", help=f"Peak: {selected_pass['peak_speed_kmh']} km/h ({selected_pass['avg_speed_ms']} m/s)")
+
+                m_r2c1, m_r2c2 = st.columns(2)
+                with m_r2c1:
+                    st.metric("Flight Time", f"{selected_pass['duration_sec']} s", help=f"Frames {selected_pass['frame']} → {selected_pass['end_frame']}")
+                with m_r2c2:
+                    st.metric("Forward Gain", f"{selected_pass['forward_gain_m']:+.1f} m", help=f"{selected_pass['start_zone']} → {selected_pass['zone']}")
+
+                # Show real annotated video snapshot at mid-pass frame for direct visual cross-check!
+                v_path = results.get("output_video_path")
+                if v_path and os.path.exists(v_path):
+                    cap_snap = cv2.VideoCapture(v_path)
+                    cap_snap.set(cv2.CAP_PROP_POS_FRAMES, selected_pass["mid_frame"])
+                    ok_fr, cam_snap = cap_snap.read()
+                    cap_snap.release()
+                    if ok_fr and cam_snap is not None:
+                        st.image(
+                            cv2.cvtColor(cam_snap, cv2.COLOR_BGR2RGB),
+                            caption=f"Broadcast Snapshot at {selected_pass['mid_frame']/25.0:.1f}s (Frame {selected_pass['mid_frame']})",
+                            use_column_width=True
+                        )
+
+        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+        # ---------------- COMPLETE PASSES TABLE + CSV EXPORT ----------------
+        st.markdown("##### 📋 All Match Passes — Full Telemetry Table")
+        pass_rows = event_engine.get_passes_table()
+        if pass_rows:
+            pass_df = pd.DataFrame(pass_rows)
+            st.dataframe(pass_df, use_container_width=True, height=260)
+            pass_csv = pass_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📥 Download All Passes CSV",
+                data=pass_csv,
+                file_name="footballistic_passes_report.csv",
+                mime="text/csv"
+            )
+
+        with st.expander("🗺️ Show Combined All-Passes Overview Map", expanded=False):
             ev_map_img = pitch_view.draw_2d_events_map(
                 event_engine.passes,
                 event_engine.interceptions,
@@ -419,58 +487,6 @@ with tab_events:
                 team_filter=None
             )
             st.image(cv2.cvtColor(ev_map_img, cv2.COLOR_BGR2RGB), use_column_width=True)
-
-    else:
-        ev_tid = 0 if "Team 0" in ev_view_mode else 1
-        t_poss = p0 if ev_tid == 0 else p1
-        t_passes = poss["team0_passes"] if ev_tid == 0 else poss["team1_passes"]
-        t_prog = poss["team0_progressive_passes"] if ev_tid == 0 else poss["team1_progressive_passes"]
-        t_rec = poss["team0_recoveries"] if ev_tid == 0 else poss["team1_recoveries"]
-        t_ent = poss["team0_attacking_entries"] if ev_tid == 0 else poss["team1_attacking_entries"]
-
-        with e1:
-            st.metric(f"Team {ev_tid} Possession", f"{t_poss}%")
-        with e2:
-            st.metric("Completed Passes", f"{t_passes} ({t_prog} Prog.)")
-        with e3:
-            st.metric("Ball Recoveries", f"{t_rec} Won")
-        with e4:
-            st.metric("3rd / Box Entries", f"{t_ent} Entries")
-
-        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-        ec1, ec2 = st.columns(2)
-        with ec1:
-            st.markdown(f"##### 🕸️ Team {ev_tid} 2D Passing Network (Node Size = Touches)")
-            net_img = pitch_view.draw_2d_passing_network(
-                ev_tid,
-                event_engine.get_passing_network(ev_tid),
-                spatial_analytics.goalkeeper_ids
-            )
-            st.image(cv2.cvtColor(net_img, cv2.COLOR_BGR2RGB), use_column_width=True)
-
-        with ec2:
-            st.markdown(f"##### ⚡ Team {ev_tid} Pass Vectors, Carries & Ball Recoveries")
-            ev_map_img = pitch_view.draw_2d_events_map(
-                event_engine.passes,
-                event_engine.interceptions,
-                carries=event_engine.carries_and_entries,
-                shots=event_engine.shots,
-                team_filter=ev_tid
-            )
-            st.image(cv2.cvtColor(ev_map_img, cv2.COLOR_BGR2RGB), use_column_width=True)
-
-    st.caption(
-        "🟡 **Gold Lanes / Arrows:** Progressive Passes & Penalty-Box Entries &nbsp;•&nbsp; "
-        "🟢 **Green Diamonds:** Ball Recoveries & Interceptions &nbsp;•&nbsp; "
-        "⚪ **Node Radius:** Scaled by Ball Touches & Passing Volume"
-    )
-
-    # Chronological Event Log Table
-    ev_rows = event_engine.get_event_log_table()
-    if ev_rows:
-        st.markdown("##### 📋 Chronological Match Event & Action Log")
-        ev_df = pd.DataFrame(ev_rows)
-        st.dataframe(ev_df, use_container_width=True, height=230)
 
 
 # -------------------------------------------------------------

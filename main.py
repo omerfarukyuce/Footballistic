@@ -643,19 +643,17 @@ def run_pipeline(
     pitch_2d_all_path = os.path.join(output_dir, "pitch_2d_heatmap_all.png")
     cv2.imwrite(pitch_2d_all_path, pitch_2d_all_img)
 
-    # Phase 2: Passing Networks, Ball Possession & Match Event Spotting
+    # Phase 2: Individual Pass Visuals, Ball Possession & Match Event Spotting
     event_engine = MatchEventEngine(spatial_analytics, fps=video_info["fps"])
     poss = event_engine.get_possession_summary()
-    net_t0 = event_engine.get_passing_network(0)
-    net_t1 = event_engine.get_passing_network(1)
 
-    pass_net_t0_img = pitch_view.draw_2d_passing_network(0, net_t0, spatial_analytics.goalkeeper_ids)
-    pass_net_t0_path = os.path.join(output_dir, "pitch_2d_passing_network_team0.png")
-    cv2.imwrite(pass_net_t0_path, pass_net_t0_img)
-
-    pass_net_t1_img = pitch_view.draw_2d_passing_network(1, net_t1, spatial_analytics.goalkeeper_ids)
-    pass_net_t1_path = os.path.join(output_dir, "pitch_2d_passing_network_team1.png")
-    cv2.imwrite(pass_net_t1_path, pass_net_t1_img)
+    # Export individual 2D freeze-frame visual for EVERY pass (completed & incomplete)
+    passes_dir = os.path.join(output_dir, "passes")
+    os.makedirs(passes_dir, exist_ok=True)
+    for p_ev in event_engine.all_passes:
+        p_img = pitch_view.draw_2d_single_pass(p_ev)
+        p_fname = f"pass_{p_ev['pass_number']:02d}_t{p_ev['team_id']}_{p_ev['player_id']}_to_{p_ev['target_id']}_{p_ev['outcome'].lower()}.png"
+        cv2.imwrite(os.path.join(passes_dir, p_fname), p_img)
 
     events_map_img = pitch_view.draw_2d_events_map(
         event_engine.passes,
@@ -670,10 +668,11 @@ def run_pipeline(
     spatial_data_path = os.path.join(output_dir, "spatial_data.json")
     spatial_analytics.save_to_json(spatial_data_path)
 
-    print(f"📊 2D Rectangular Heatmaps, Formations & Passing Networks saved to {output_dir}")
+    print(f"📊 2D Heatmaps, Formations & {len(event_engine.all_passes)} Individual Pass Visuals saved to {output_dir}")
     print(
         f"⚡ Possession: Team 0 {poss['team0_possession_pct']}% vs Team 1 {poss['team1_possession_pct']}% | "
-        f"Passes: {poss['total_passes']} | Recoveries: {poss['total_recoveries']}"
+        f"Passes: {poss['total_passes']}/{poss['total_passes_attempted']} ({poss['total_pass_accuracy']}%) | "
+        f"Avg Len: {poss['avg_pass_length_m']}m | Avg Speed: {poss['avg_pass_speed_kmh']} km/h"
     )
     print(f"✅ Total unique players tracked: {len(avg_positions)} (11 vs 11 FIFA Standard)")
     print("=" * 64)

@@ -29,9 +29,9 @@ Traditional match analytics (e.g., Opta, StatsBomb) rely heavily on human annota
 - [x] **2D Bird's-Eye Pitch Mapping & Spatial Analytics:** Projective perspective foreshortening onto a standard $105\text{m} \times 68\text{m}$ pitch, Gaussian KDE heatmaps, convex-hull tactical shapes, team compactness/centroids, and strict 11v11 formations
 - [x] **2-Pass Broadcast Video Renderer:** Globally consistent team colors, stable player IDs, GMC-pinned player & white ball trails encoded to web-ready H.264
 
-### 📍 Phase 2: Event Detection & Passing Intelligence ✅ (Completed)
+### 📍 Phase 2: Event Detection & Individual Pass Intelligence ✅ (Completed)
 - [x] **Ball Possession Engine:** Frame-by-frame dynamic player & team ball ownership, possession percentage (`%`), continuous possession timeline, and team control spells
-- [x] **Passing Network & Pass Matrix:** Automatic completed pass detection (same-team possession transfers), progressive & key pass tagging, pass length/direction stats, and a 2D bird's-eye **Passing Network** graph (node size = touches, edge weight = pass volume)
+- [x] **Physics-Verified Individual Pass Breakdown:** Kinematic aerial fly-over rejection + exact kick-to-reception timing for both **Completed** and **Incomplete / Intercepted** passes — outputting **From → To player IDs**, pass type (`Long Switch`, `Box Entry`, `Progressive`, `Short`, `Intercepted`), perspective-calibrated **length (m)** on a $105\text{m} \times 68\text{m}$ FIFA pitch, **average & peak ball speed (km/h)**, and **1 dedicated 2D freeze-frame visual per pass** showing the actual ball trajectory and all 22 players
 - [x] **Turnovers, Interceptions & Recoveries:** Opponent possession transitions, ball-winner attribution, and high-turnover zone mapping
 - [x] **Shots, Crosses & Final-Third / Box Entries:** High-velocity goal-mouth ball vector spotting, flank crosses, and penalty-area entries
 
@@ -42,7 +42,7 @@ Traditional match analytics (e.g., Opta, StatsBomb) rely heavily on human annota
 
 ### 📍 Phase 4: Interactive Tactical Match Center
 - [x] **Minimalist Streamlit Studio (`app.py`):** Instant pre-computed dual-match loader, model switcher (`YOLO11` / `YOLOv8`), custom video upload, Team Analytics, Player Deep-Dive, H.264 annotated replay, and CSV export
-- [x] **Event & Passing Network Tab:** Interactive passing network canvas, dual-team possession split bar, 2D action vector map, and chronological match event log
+- [x] **Pass-by-Pass Tactical Inspector Tab:** Interactive single-pass 2D freeze-frame viewer (paired with real broadcast mid-pass snapshots), dual-team possession split bar, complete All-Passes telemetry table (`From → To`, `Outcome`, `Length m`, `Speed km/h`), and CSV export
 - [ ] **Automated Match Report Export:** One-click printable HTML / PDF scouting report summarizing formations, heatmaps, passing networks, and KPIs
 
 ### 📍 Phase 5: Pro-Grade Calibration (Future Stretch)
@@ -73,7 +73,8 @@ Footballistic/
 │   ├── homography/
 │   │   └── pitch_view.py           # Projective 2D top-down pitch, heatmaps & formations
 │   ├── analysis/
-│   │   └── heatmap.py              # Spatial analytics, 11v11 squad enforcement & JSON I/O
+│   │   ├── heatmap.py              # Spatial analytics, 11v11 squad enforcement & JSON I/O
+│   │   └── events.py               # Pass telemetry (length/speed), possession & event engine
 │   └── utils/
 │       ├── drawing.py              # Broadcast ellipses, GMC-pinned trails & white ball trail
 │       └── video_utils.py          # Video streaming & PyAV H.264 encoding
