@@ -91,6 +91,73 @@ class BallTracker:
 
     # ------------------------------------------------------------------ online step
 
+    def _local_gmc_motion(
+        self,
+        curr_gray: np.ndarray,
+        cx: float,
+        cy: float,
+        warp_matrix: np.ndarray,
+        patch_half: int = 12
+    ) -> float:
+        """
+        Measures peak pixel change around (cx, cy) after compensating for camera motion.
+        A painted penalty spot or center spot is stationary in pitch coordinates (~0-7),
+        whereas a rolling/flying football creates strong local motion (>= 16).
+        """
+        if self.prev_gray is None:
+            return 99.0  # First frame: cannot measure motion yet, do not reject
+        fh, fw = curr_gray.shape[:2]
+        x1 = max(0, int(round(cx)) - patch_half)
+        y1 = max(0, int(round(cy)) - patch_half)
+        x2 = min(fw, int(round(cx)) + patch_half)
+        y2 = min(fh, int(round(cy)) + patch_half)
+        if x2 - x1 < 8 or y2 - y1 < 8:
+            return 99.0
+
+        H_full = np.vstack([warp_matrix.astype(np.float32), [0.0, 0.0, 1.0]])
+        T_roi = np.array([[1.0, 0.0, -x1], [0.0, 1.0, -y1], [0.0, 0.0, 1.0]], dtype=np.float32)
+        M_local = (T_roi @ H_full)[:2, :]
+
+        prev_w = cv2.warpAffine(
+            self.prev_gray, M_local, (x2 - x1, y2 - y1),
+            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+        )
+        diff = cv2.absdiff(curr_gray[y1:y2, x1:x2], prev_w)
+        return float(np.percentile(diff, 95))
+
+    @staticmethod
+    def _nearest_player_dist(cx: float, cy: float, player_bboxes: List[List[float]]) -> float:
+        """Distance from (cx, cy) to the nearest player bounding box (feet or body)."""
+        if not player_bboxes:
+            return 999.0
+        best = 999.0
+        for px1, py1, px2, py2 in player_bboxes:
+            # Clamp point to bbox to get distance to nearest point on player
+            nx = min(max(cx, px1), px2)
+            ny = min(max(cy, py1), py2)
+            d = math.hypot(cx - nx, cy - ny)
+            if d < best:
+                best = d
+        return best
+
+    def _is_unattended_static_spot(
+        self,
+        curr_gray: np.ndarray,
+        cx: float,
+        cy: float,
+        warp_matrix: np.ndarray,
+        player_bboxes: List[List[float]]
+    ) -> bool:
+        """
+        Detects painted pitch dots (penalty spots, center spot) mistaken for a ball:
+        zero GMC-compensated motion AND no player/goalkeeper nearby.
+        """
+        motion = self._local_gmc_motion(curr_gray, cx, cy, warp_matrix)
+        if motion >= 12.0:
+            return False
+        near_p = self._nearest_player_dist(cx, cy, player_bboxes)
+        return near_p > 55.0
+
     def _detect_motion_blob_ball(
         self,
         frame: np.ndarray,
@@ -197,12 +264,16 @@ class BallTracker:
         """
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Convert full-frame YOLO candidates to (cx, cy, radius, conf)
+        # Convert full-frame YOLO candidates to (cx, cy, radius, conf), filtering out
+        # unattended static painted dots (penalty spots / center spot!)
+        p_boxes = player_bboxes or []
         cand_list: List[Tuple[float, float, float, float]] = []
         for b in valid_balls:
             x1, y1, x2, y2 = b.bbox
             cx = (x1 + x2) * 0.5
             cy = (y1 + y2) * 0.5
+            if self._is_unattended_static_spot(curr_gray, cx, cy, warp_matrix, p_boxes):
+                continue
             rad = max(5.0, min(14.0, ((x2 - x1) + (y2 - y1)) * 0.25))
             cand_list.append((float(cx), float(cy), float(rad), float(b.confidence)))
 
@@ -221,7 +292,9 @@ class BallTracker:
             for cx, cy, rad, conf in cand_list:
                 d = math.hypot(cx - pred_pos[0], cy - pred_pos[1])
                 if d <= gate:
-                    score = conf * 1.4 - (d / gate)
+                    motion = self._local_gmc_motion(curr_gray, cx, cy, warp_matrix)
+                    motion_bonus = 0.22 if motion >= 16.0 else 0.0
+                    score = conf * 1.4 + motion_bonus - (d / gate)
                     if score > best_score:
                         best_score = score
                         chosen = (cx, cy, rad, conf, "yolo")
@@ -245,11 +318,15 @@ class BallTracker:
                 x1, y1, x2, y2 = b.bbox
                 cx = (x1 + x2) * 0.5
                 cy = (y1 + y2) * 0.5
+                if self._is_unattended_static_spot(curr_gray, cx, cy, warp_matrix, p_boxes):
+                    continue
                 rad = max(5.0, min(14.0, ((x2 - x1) + (y2 - y1)) * 0.25))
                 cand_list.append((float(cx), float(cy), float(rad), float(b.confidence)))
                 d = math.hypot(cx - pred_pos[0], cy - pred_pos[1])
                 if d <= gate_roi:
-                    score = float(b.confidence) * 1.4 - (d / gate_roi)
+                    motion = self._local_gmc_motion(curr_gray, cx, cy, warp_matrix)
+                    motion_bonus = 0.22 if motion >= 16.0 else 0.0
+                    score = float(b.confidence) * 1.4 + motion_bonus - (d / gate_roi)
                     if score > best_score:
                         best_score = score
                         chosen = (float(cx), float(cy), float(rad), float(b.confidence), "roi_yolo")
@@ -262,7 +339,7 @@ class BallTracker:
         ):
             blob = self._detect_motion_blob_ball(
                 frame, curr_gray, pred_pos[0], pred_pos[1],
-                warp_matrix, player_bboxes or []
+                warp_matrix, p_boxes
             )
             if blob is not None:
                 chosen = (blob[0], blob[1], blob[2], 0.12, "motion_blob")
@@ -270,8 +347,11 @@ class BallTracker:
         # Step 5: Re-acquire if uninitialized or lost for a long time
         if chosen is None and (not self.kf.initialized or self.frames_since_seen > 22):
             if cand_list:
-                # Pick highest-confidence candidate (prefer >= 0.15 to avoid random noise)
-                best_c = max(cand_list, key=lambda c: c[3])
+                # Prefer moving balls during re-acquisition so static pitch marks never hijack the tracker
+                def _reacq_key(c):
+                    mot = self._local_gmc_motion(curr_gray, c[0], c[1], warp_matrix)
+                    return c[3] + (0.25 if mot >= 16.0 else 0.0)
+                best_c = max(cand_list, key=_reacq_key)
                 if best_c[3] >= 0.15:
                     chosen = (best_c[0], best_c[1], best_c[2], best_c[3], "yolo_reacq")
 

@@ -32,6 +32,126 @@ class PitchDetector:
         self.pitch_x_bounds: Optional[Tuple[int, int]] = None  # (x_left, x_right)
         self.top_edge_by_x: Optional[np.ndarray] = None        # top grass Y per image column
 
+        # Near (bottom) touchline model y = a*x + b, detected from the painted white line.
+        # Grass usually continues beyond the touchline (apron / technical area), so the
+        # grass mask alone cannot separate coaches standing just outside the line.
+        self.near_touchline: Optional[Tuple[float, float]] = None
+        self._touchline_age: int = 999
+        self._rng = np.random.default_rng(7)
+
+    # ------------------------------------------------------------------ touchline
+
+    def detect_near_touchline(self, frame: np.ndarray) -> Optional[Tuple[float, float]]:
+        """
+        Detects the near (bottom) touchline as a straight, thin, near-horizontal white
+        line that has grass directly above it and spans a large part of the frame width.
+
+        Method: per-column scan of thin white runs in the lower part of the image,
+        followed by RANSAC line fitting. Lines covering < 40% of sampled columns are
+        rejected, which filters out watermarks, ad-board lettering and short penalty-box
+        edges. If several long lines exist (e.g. a technical-area line below), the
+        topmost strong one is the touchline.
+        """
+        h, w = frame.shape[:2]
+        y0 = int(h * 0.55)
+        hsv = cv2.cvtColor(frame[max(0, y0 - 8):, :], cv2.COLOR_BGR2HSV)
+        off = y0 - max(0, y0 - 8)
+        white = (hsv[:, :, 1] < 75) & (hsv[:, :, 2] > 160)
+        grass = (
+            (hsv[:, :, 0] >= 28) & (hsv[:, :, 0] <= 58) &
+            (hsv[:, :, 1] >= 45) & (hsv[:, :, 2] >= 35)
+        )
+
+        step = 6
+        xs_pts: List[float] = []
+        ys_pts: List[float] = []
+        for x in range(0, w, step):
+            col = white[off:, x].astype(np.int8)
+            if not col.any():
+                continue
+            d = np.diff(np.concatenate(([0], col, [0])))
+            starts = np.where(d == 1)[0]
+            ends = np.where(d == -1)[0]
+            for s, e in zip(starts, ends):
+                run_len = e - s
+                if run_len < 1 or run_len > 10:
+                    continue
+                ys_local = s + off  # index in hsv crop
+                above = ys_local - 4
+                if above < 0 or not (grass[above, x] or grass[max(0, above - 2), x]):
+                    continue
+                xs_pts.append(float(x))
+                ys_pts.append(float(y0 + s + run_len * 0.5))
+
+        n = len(xs_pts)
+        if n < 30:
+            return None
+
+        xs = np.asarray(xs_pts)
+        ys = np.asarray(ys_pts)
+        n_cols = w // step
+        max_slope = np.tan(np.radians(12.0))
+
+        found: List[Tuple[float, float, int]] = []
+        remaining = np.ones(n, dtype=bool)
+        for _ in range(3):  # extract up to 3 distinct long lines
+            idx_pool = np.where(remaining)[0]
+            if len(idx_pool) < 30:
+                break
+            best = None
+            best_cov = 0
+            for _it in range(220):
+                i, j = self._rng.choice(idx_pool, 2, replace=False)
+                dx = xs[j] - xs[i]
+                if abs(dx) < 200:
+                    continue
+                a = (ys[j] - ys[i]) / dx
+                if abs(a) > max_slope:
+                    continue
+                b = ys[i] - a * xs[i]
+                inl = remaining & (np.abs(ys - (a * xs + b)) < 3.5)
+                cov = len(np.unique(xs[inl]))
+                if cov > best_cov:
+                    best_cov = cov
+                    best = inl
+            if best is None or best_cov < 0.40 * n_cols:
+                break
+            a_fit, b_fit = np.polyfit(xs[best], ys[best], 1)
+            if abs(a_fit) > max_slope:
+                break
+            found.append((float(a_fit), float(b_fit), best_cov))
+            # remove a band around this line before searching the next one
+            remaining &= np.abs(ys - (a_fit * xs + b_fit)) > 8.0
+
+        if not found:
+            return None
+
+        strongest = max(f[2] for f in found)
+        strong = [f for f in found if f[2] >= 0.65 * strongest]
+        cx = w * 0.5
+        a_best, b_best, _ = min(strong, key=lambda f: f[0] * cx + f[1])  # topmost
+        return a_best, b_best
+
+    def update_near_touchline(self, frame: np.ndarray) -> None:
+        """Updates the cached touchline model; keeps the last one for a few frames on misses."""
+        line = self.detect_near_touchline(frame)
+        if line is not None:
+            self.near_touchline = line
+            self._touchline_age = 0
+        else:
+            self._touchline_age += 1
+            if self._touchline_age > 12:
+                self.near_touchline = None
+
+    def is_outside_near_touchline(self, foot: Tuple[float, float], bbox_h: float) -> bool:
+        """True if a person's feet are clearly below (outside) the near touchline."""
+        if self.near_touchline is None:
+            return False
+        a, b = self.near_touchline
+        line_y = a * float(foot[0]) + b
+        margin = max(6.0, 0.08 * float(bbox_h))
+        return float(foot[1]) > line_y + margin
+
     # ------------------------------------------------------------------ mask
 
     def get_pitch_mask(self, frame: np.ndarray) -> np.ndarray:

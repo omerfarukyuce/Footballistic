@@ -113,7 +113,10 @@ class FootballDetector:
                 by2 = float(xyxy[i][3]) + oy
                 bbox = [bx1, by1, bx2, by2]
 
-                if cls_id == 0 and conf >= self.confidence:
+                if cls_id == 0 and conf >= min(self.confidence, 0.08):
+                    # Pass low-conf (0.08..0.18) person boxes to BoT-SORT Stage-2 so
+                    # distant white-jersey players against white ad boards stay tracked
+                    # without spawning new false tracks (new_track_thresh=0.24).
                     players.append(TrackedPlayer(tracker_id=None, bbox=bbox, confidence=conf))
                 elif cls_id == 32 and conf >= self.ball_confidence:
                     balls.append(DetectedBall(bbox=bbox, confidence=conf))

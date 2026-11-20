@@ -1,44 +1,53 @@
 # ⚽ Footballistic: AI-Powered Football Match Analytics with Computer Vision
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![YOLOv8](https://img.shields.io/badge/YOLO-v8%20%2F%20v11-00FFFF.svg)](https://github.com/ultralytics/ultralytics)
-[![Supervision](https://img.shields.io/badge/Supervision-Roboflow-purple.svg)](https://github.com/roboflow/supervision)
+[![YOLO](https://img.shields.io/badge/YOLO-v8%20%2F%20v11-00FFFF.svg)](https://github.com/ultralytics/ultralytics)
+[![BoT-SORT](https://img.shields.io/badge/Tracker-GMC%20BoT--SORT-emerald.svg)](https://github.com/ultralytics/ultralytics)
+[![Streamlit](https://img.shields.io/badge/Dashboard-Streamlit-FF4B4B.svg)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Footballistic** is an open-source football (soccer) analytics engine powered by Deep Learning and Computer Vision. It automatically extracts player tracking, team classification, tactical pitch radar mappings, heatmaps, and comprehensive match statistics from tactical/wide-angle match footage.
+**Footballistic** is an open-source football (soccer) analytics engine powered by Deep Learning and Computer Vision. It automatically extracts persistent player tracking, camera-motion-compensated ball trajectories, team & goalkeeper identification, 2D tactical bird's-eye formations, heatmaps, and match statistics from single tactical/wide-angle camera feeds.
 
 ---
 
 ## 📌 Project Overview
 
-Traditional match analytics (e.g., Opta, StatsBomb) rely heavily on human annotators clicking timestamps and pitch coordinates, or expensive multi-camera optical setups installed in elite stadiums. 
+Traditional match analytics (e.g., Opta, StatsBomb) rely heavily on human annotators clicking timestamps and pitch coordinates, or expensive multi-camera optical installations inside elite stadiums.
 
-**Footballistic** aims to democratize professional-grade football analytics by leveraging state-of-the-art vision models on single tactical/wide-angle camera feeds.
+**Footballistic** aims to democratize professional-grade football intelligence by combining high-resolution object detection, camera-motion-compensated multi-object tracking, and spatial analytics on standard wide-angle match video.
 
 ---
 
 ## 🚀 Roadmap & Core Modules
 
-### 📍 Phase 1: Core Foundation & Spatial Analytics (Current Focus)
-- [x] Repository initialization & architectural structure
-- [ ] **Object Detection:** Detect players, referees, goalkeepers, and the ball (`YOLOv8` / `YOLOv11`)
-- [ ] **Multi-Object Tracking:** Assign persistent IDs across video frames (`ByteTrack`)
-- [ ] **Team Identification:** Unsupervised jersey color clustering (`K-Means`) to classify teams & referees
-- [ ] **Perspective Transform (Homography):** Map camera coordinates onto a 2D top-down standard pitch model ($105m \times 68m$)
-- [ ] **Heatmaps:** Generate player and team spatial density distributions (Gaussian KDE)
-- [ ] **Average Formations:** Calculate dynamic average player positions and tactical shapes
+### 📍 Phase 1: Core Vision Pipeline & Spatial Analytics ✅ (Completed)
+- [x] **Repository & Modular Architecture:** Clean separation of detection, tracking, team classification, homography, spatial analytics, and dashboard UI
+- [x] **High-Resolution Pitch-Cropped Detection:** `YOLO11m` / `YOLOv8m` at `1280px` cropped dynamically to the playing field (`PitchDetector` with non-convex turf segmentation, green LED ad-board immunity, and white near-touchline RANSAC detection to exclude spectators, dugouts, coaches, and linesmen)
+- [x] **Camera-Motion-Compensated Tracking (`GMC BoT-SORT` + Lab Re-ID):** `sparseOptFlow` affine camera-pan compensation, Stage-3 foot-distance + CIE Lab jersey re-association for small distant players, global GMC tracklet consolidation, FIFA 11-player prior re-stitching, and smooth occlusion-gap interpolation (`#1`–`#22` stable IDs)
+- [x] **Dedicated Football Ball Tracker & White Comet Trail:** GMC-Kalman filter, 1:1 native-resolution `320px` ROI zoom recovery, local motion/white-blob recovery, unattended static penalty-spot rejection, and GMC-pinned pure white trajectory rendering
+- [x] **Team, Goalkeeper & Referee Classification:** Grass-excluded torso color extraction, track-level iterative trimmed K-Means (`Lab`), referee outlier rejection, and defensive-extremity Goalkeeper identification (`#1 GK`, `#13 GK`)
+- [x] **2D Bird's-Eye Pitch Mapping & Spatial Analytics:** Projective perspective foreshortening onto a standard $105\text{m} \times 68\text{m}$ pitch, Gaussian KDE heatmaps, convex-hull tactical shapes, team compactness/centroids, and strict 11v11 formations
+- [x] **2-Pass Broadcast Video Renderer:** Globally consistent team colors, stable player IDs, GMC-pinned player & white ball trails encoded to web-ready H.264
 
-### 📍 Phase 2: Event & Match Action Spotting
-- [ ] **Ball Possession:** Proximity-based dynamic ball ownership detection
-- [ ] **Passing Network:** Completed passes, incomplete passes, and passing lanes
-- [ ] **Shots & Crosses:** Ball trajectory velocity and goal-mouth vector analysis
+### 📍 Phase 2: Event Detection & Passing Intelligence (Next Up)
+- [ ] **Ball Possession Engine:** Frame-by-frame dynamic player & team ball ownership, possession percentage (`%`), continuous possession timeline, and team control spells
+- [ ] **Passing Network & Pass Matrix:** Automatic completed pass detection (same-team possession transfers), progressive & key pass tagging, pass length/direction stats, and a 2D bird's-eye **Passing Network** graph (node size = touches, edge weight = pass volume)
+- [ ] **Turnovers, Interceptions & Recoveries:** Opponent possession transitions, ball-winner attribution, and high-turnover zone mapping
+- [ ] **Shots, Crosses & Final-Third / Box Entries:** High-velocity goal-mouth ball vector spotting, flank crosses, and penalty-area entries
 
-### 📍 Phase 3: Physical & Tactical Metrics
-- [ ] **Physical Metrics:** Distance covered (km), sprint counts, and instantaneous speed
-- [ ] **Duels & Interceptions:** Ground duels, aerial duels, and recoveries
+### 📍 Phase 3: Advanced Physical & Tactical Metrics
+- [x] **Core Physical Metrics:** Estimated distance covered (`m`), average speed (`km/h`), pitch presence (`%`), and tactical third/channel distribution per player
+- [ ] **Speed Zones & Sprint Analytics:** Instantaneous speed smoothing, top speed (`km/h`), high-speed running (`> 18 km/h`), and sprint counts (`> 21 km/h`)
+- [ ] **Tactical Shape Dynamics:** Defensive line height, midfield-to-defense gap, team compactness over time, and pressing intensity (nearest-defender pressure distance)
 
-### 📍 Phase 4: Interactive Dashboard
-- [ ] **Streamlit Match Center:** Visual dashboards, interactive replays, and PDF/HTML match reports
+### 📍 Phase 4: Interactive Tactical Match Center
+- [x] **Minimalist Streamlit Studio (`app.py`):** Instant pre-computed dual-match loader, model switcher (`YOLO11` / `YOLOv8`), custom video upload, Team Analytics, Player Deep-Dive, H.264 annotated replay, and CSV export
+- [ ] **Event & Passing Network Tab:** Interactive passing network canvas, possession timeline charts, and filterable match event log
+- [ ] **Automated Match Report Export:** One-click printable HTML / PDF scouting report summarizing formations, heatmaps, passing networks, and KPIs
+
+### 📍 Phase 5: Pro-Grade Calibration (Future Stretch)
+- [ ] **Automatic Pitch Keypoint Homography:** Per-frame line/intersection keypoint detection for exact metric projective homography across any camera pan/zoom
+- [ ] **Jersey Number Recognition (OCR):** Optional cropped back-number recognition to link track IDs to real matchday squad numbers
 
 ---
 
@@ -46,21 +55,33 @@ Traditional match analytics (e.g., Opta, StatsBomb) rely heavily on human annota
 
 ```text
 Footballistic/
+├── configs/
+│   ├── football_botsort.yaml       # GMC BoT-SORT config (sparseOptFlow + 120f buffer)
+│   └── football_bytetrack.yaml     # Legacy ByteTrack config
 ├── data/
-│   └── sample_videos/        # Tactical camera footage and test clips
-├── weights/                  # Pre-trained and fine-tuned model checkpoints
+│   └── sample_videos/              # Tactical wide-angle & broadcast sample clips
+├── weights/                        # YOLO11m / YOLOv8m model checkpoints
 ├── src/
-│   ├── detection/            # Player, referee, and ball detection modules
-│   ├── tracking/             # Multi-object tracking (ByteTrack / BoT-SORT)
-│   ├── team_assignment/      # K-Means jersey color clustering
-│   ├── homography/           # 2D pitch keypoint mapping and radar view
-│   ├── analysis/             # Heatmaps, average positions, and event metrics
-│   └── utils/                # Video I/O, geometry, and drawing utilities
-├── output/                   # Processed videos, radar animations, and heatmaps
-├── main.py                   # Main pipeline video processor
-├── app.py                    # Streamlit interactive analytics dashboard
+│   ├── detection/
+│   │   ├── detector.py             # High-res pitch-cropped YOLO + 1:1 ROI ball zoom
+│   │   └── pitch_detector.py       # Non-convex turf mask & RANSAC near-touchline detector
+│   ├── tracking/
+│   │   ├── football_tracker.py     # GMC BoT-SORT + Stage-3 Lab Re-ID + global stitcher
+│   │   └── ball_tracker.py         # GMC-Kalman + ROI zoom + static-spot rejection
+│   ├── team_assignment/
+│   │   └── color_assigner.py       # Grass-excluded Lab K-Means, GK & referee classifier
+│   ├── homography/
+│   │   └── pitch_view.py           # Projective 2D top-down pitch, heatmaps & formations
+│   ├── analysis/
+│   │   └── heatmap.py              # Spatial analytics, 11v11 squad enforcement & JSON I/O
+│   └── utils/
+│       ├── drawing.py              # Broadcast ellipses, GMC-pinned trails & white ball trail
+│       └── video_utils.py          # Video streaming & PyAV H.264 encoding
+├── output/                         # Pre-computed Match 1 analytics & video
+├── output_sample2/                 # Pre-computed Match 2 analytics & video
+├── main.py                         # 2-pass computer vision pipeline entrypoint
+├── app.py                          # Streamlit interactive tactical match center
 ├── requirements.txt
-├── .gitignore
 └── README.md
 ```
 
@@ -92,21 +113,24 @@ pip install -r requirements.txt
 
 ---
 
-## 🖥️ Running the Interactive Web Dashboard
+## 🖥️ Running the Pipeline & Interactive Web Dashboard
 
-To launch the interactive Streamlit football analytics studio:
+### Run the 2-pass CV pipeline on a video
+```bash
+python main.py --video data/sample_videos/sample2.mp4 --output output_sample2 --frames 0
+```
 
+### Launch the interactive Streamlit Match Center
 ```bash
 streamlit run app.py
 ```
 
 From the dashboard, you can:
-- **Upload** your own tactical match video or use the included sample.
-- **Run match analysis** with customizable tracking frames and detection confidence.
-- **Watch the annotated replay** with persistent player IDs and ball tracking.
-- **Inspect team heatmaps & tactical formations** directly on the pitch.
-- **Deep-dive into individual players**: inspect individual heatmaps, presence rates, and movement trajectories.
-- **Export** player spatial data directly to CSV.
+- **Switch instantly** between pre-computed sample matches or **upload** your own match video.
+- **Select** between `YOLO11m` and `YOLOv8m` detection models.
+- **Inspect Team Analytics:** 11v11 2D formations, team centroids, compactness, channel preference, and collective heatmaps.
+- **Deep-Dive into Individual Players:** individual 2D trajectories, heatmaps, estimated distance, speed, and tactical zone.
+- **Watch the Annotated Replay** with stable player IDs, GMC-pinned movement trails, and a pure white ball trajectory trail, and **export** spatial data to CSV.
 
 ---
 

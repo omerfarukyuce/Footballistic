@@ -244,8 +244,9 @@ def run_pipeline(
         if first_frame_saved is None:
             first_frame_saved = frame.copy()
 
-        # 1a. Non-convex pitch segmentation + tight crop bounds (excludes crowd & dugouts)
+        # 1a. Non-convex pitch segmentation + white near-touchline model (excludes crowd, dugouts & coaches!)
         pitch_detector.get_pitch_mask(frame)
+        pitch_detector.update_near_touchline(frame)
         crop_bounds = pitch_detector.get_pitch_crop_bounds(frame, top_pad=55, bottom_pad=8)
         frame_y_bounds[f_idx] = pitch_detector.pitch_y_bounds
         frame_top_edges[f_idx] = (
@@ -258,7 +259,7 @@ def run_pipeline(
         detection = detector.detect_frame(frame, crop_bounds=crop_bounds)
 
         # 1c. Filter to ONLY inside-pitch player candidates BEFORE tracking
-        #     (ensures zero crowd spectators or dugout staff ever enter the tracker!)
+        #     (ensures zero crowd spectators, coaches below the touchline, or dugout staff enter the tracker!)
         pitch_bboxes: List[List[float]] = []
         pitch_confs: List[float] = []
         pitch_bgrs: List[Optional[np.ndarray]] = []
@@ -274,6 +275,8 @@ def run_pipeline(
 
             foot = ((bbox[0] + bbox[2]) * 0.5, bbox[3])
             if not pitch_detector.is_inside_pitch(foot, tolerance_px=0.0):
+                continue
+            if pitch_detector.is_outside_near_touchline(foot, bh):
                 continue
 
             bgr = team_assigner.extract_jersey_color(frame, bbox)
@@ -418,8 +421,8 @@ def run_pipeline(
         stitched_tracks, stitched_teams, stitched_gks
     )
 
-    # 2f. Smooth GMC-compensated gap interpolation for short occlusions (<= 12 frames)
-    final_tracks = interpolate_player_gaps(final_tracks, frame_warps, max_gap=12)
+    # 2f. Smooth GMC-compensated gap interpolation for short occlusions / white-board fadeouts (<= 18 frames)
+    final_tracks = interpolate_player_gaps(final_tracks, frame_warps, max_gap=18)
 
     # 2g. Finalize Ball Trajectory (outlier pruning + rescue + GMC-compensated interpolation)
     final_ball_positions = ball_tracker.finalize_trajectory(
