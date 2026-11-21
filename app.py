@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from main import run_pipeline
 from src.analysis.heatmap import SpatialAnalytics
 from src.analysis.events import MatchEventEngine
 from src.homography.pitch_view import PitchView2D
@@ -894,6 +893,7 @@ if "run_btn" in locals() and run_btn:
 
     try:
         with st.spinner("Running high-resolution detection, GMC BoT-SORT tracking, and ball telemetry..."):
+            from main import run_pipeline
             pipeline_res = run_pipeline(
                 video_path=target_video,
                 output_dir=output_dest,
@@ -1170,7 +1170,7 @@ with tab_events:
             # Clean outcome text without emojis for cohesive editorial look
             if "Outcome" in pass_df.columns:
                 pass_df["Outcome"] = pass_df["Outcome"].str.replace("✅ ", "", regex=False).str.replace("❌ ", "", regex=False)
-            st.dataframe(pass_df, use_container_width=True, height=320, hide_index=True)
+            st.dataframe(pass_df, use_container_width=True, height=360, hide_index=True)
 
             dl_col, _ = st.columns([1.2, 4.8])
             with dl_col:
