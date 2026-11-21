@@ -1,53 +1,208 @@
-# ⚽ Footballistic: AI-Powered Football Match Analytics with Computer Vision
+<div align="center">
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![YOLO](https://img.shields.io/badge/YOLO-v8%20%2F%20v11-00FFFF.svg)](https://github.com/ultralytics/ultralytics)
-[![BoT-SORT](https://img.shields.io/badge/Tracker-GMC%20BoT--SORT-emerald.svg)](https://github.com/ultralytics/ultralytics)
-[![Streamlit](https://img.shields.io/badge/Dashboard-Streamlit-FF4B4B.svg)](https://streamlit.io/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+# ⚽ Footballistic
 
-**Footballistic** is an open-source football (soccer) analytics engine powered by Deep Learning and Computer Vision. It automatically extracts persistent player tracking, camera-motion-compensated ball trajectories, team & goalkeeper identification, 2D tactical bird's-eye formations, heatmaps, and match statistics from single tactical/wide-angle camera feeds.
+### Broadcast-grade football analytics from a single camera feed
+
+Detect and track every player and the ball, identify teams, map the action onto a 2D pitch,<br>
+and break down every pass — **who, to whom, how far, how fast, and whether it arrived.**
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![YOLO](https://img.shields.io/badge/Detection-YOLO11%20%2F%20YOLOv8-00B8D4)](https://github.com/ultralytics/ultralytics)
+[![Tracking](https://img.shields.io/badge/Tracking-GMC%20BoT--SORT-10B981)](https://github.com/ultralytics/ultralytics)
+[![Streamlit](https://img.shields.io/badge/Dashboard-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+<br>
+
+<img src="docs/assets/demo_sample_12s.gif" alt="Footballistic demo: 12 seconds of tracked broadcast footage" width="860">
+
+<sub>First 12 seconds of an analysed Bundesliga broadcast clip — stable player IDs, team colours, GMC-pinned movement trails and the white ball trail.
+<a href="docs/assets/demo_sample_12s.mp4">Watch the full-quality MP4 →</a></sub>
+
+</div>
 
 ---
 
-## 📌 Project Overview
+## ✨ Why Footballistic?
 
-Traditional match analytics (e.g., Opta, StatsBomb) rely heavily on human annotators clicking timestamps and pitch coordinates, or expensive multi-camera optical installations inside elite stadiums.
+Professional match analytics (Opta, StatsBomb, Second Spectrum) depends on human event-taggers or multi-camera optical systems installed in elite stadiums.
+**Footballistic** asks a simple question: *how much of that can be recovered from ordinary broadcast video?*
 
-**Footballistic** aims to democratize professional-grade football intelligence by combining high-resolution object detection, camera-motion-compensated multi-object tracking, and spatial analytics on standard wide-angle match video.
+| | |
+|---|---|
+| 🎯 **Tracks everyone** | Close **and** distant players, kept on the same ID through fast camera pans |
+| ⚽ **Tracks the ball** | A dedicated tracker with a white comet trail, ~95 % frame coverage on the demo clip |
+| 👕 **Knows the teams** | Jersey-colour clustering separates both teams, goalkeepers, referees and coaching staff |
+| 🗺️ **Thinks in 2D** | Everything is projected onto a FIFA-sized 105 × 68 m pitch for tactical views |
+| 📏 **Measures passes** | Per-pass length (m), ball speed (km/h), flight time and outcome — each with its own freeze-frame |
+| 🖥️ **Explorable** | A minimal, dark, no-sidebar Streamlit dashboard with CSV export |
 
 ---
 
-## 🚀 Roadmap & Core Modules
+## 🖥️ Dashboard Tour
 
-### 📍 Phase 1: Core Vision Pipeline & Spatial Analytics ✅ (Completed)
-- [x] **Repository & Modular Architecture:** Clean separation of detection, tracking, team classification, homography, spatial analytics, and dashboard UI
-- [x] **High-Resolution Pitch-Cropped Detection:** `YOLO11m` / `YOLOv8m` at `1280px` cropped dynamically to the playing field (`PitchDetector` with non-convex turf segmentation, green LED ad-board immunity, and white near-touchline RANSAC detection to exclude spectators, dugouts, coaches, and linesmen)
-- [x] **Camera-Motion-Compensated Tracking (`GMC BoT-SORT` + Lab Re-ID):** `sparseOptFlow` affine camera-pan compensation, Stage-3 foot-distance + CIE Lab jersey re-association for small distant players, global GMC tracklet consolidation, FIFA 11-player prior re-stitching, and smooth occlusion-gap interpolation (`#1`–`#22` stable IDs)
-- [x] **Dedicated Football Ball Tracker & White Comet Trail:** GMC-Kalman filter, 1:1 native-resolution `320px` ROI zoom recovery, local motion/white-blob recovery, unattended static penalty-spot rejection, and GMC-pinned pure white trajectory rendering
-- [x] **Team, Goalkeeper & Referee Classification:** Grass-excluded torso color extraction, track-level iterative trimmed K-Means (`Lab`), referee outlier rejection, and defensive-extremity Goalkeeper identification (`#1 GK`, `#13 GK`)
-- [x] **2D Bird's-Eye Pitch Mapping & Spatial Analytics:** Projective perspective foreshortening onto a standard $105\text{m} \times 68\text{m}$ pitch, Gaussian KDE heatmaps, convex-hull tactical shapes, team compactness/centroids, and strict 11v11 formations
-- [x] **2-Pass Broadcast Video Renderer:** Globally consistent team colors, stable player IDs, GMC-pinned player & white ball trails encoded to web-ready H.264
+### 1 · Pass-by-pass tactical inspector
+Every detected pass gets its own bird's-eye freeze-frame: all 22 players at the moment of the kick, the real ball path, the passer, the receiver (or interceptor), and the telemetry — next to a real broadcast frame for verification. Step through the match with the ← / → buttons.
 
-### 📍 Phase 2: Event Detection & Individual Pass Intelligence ✅ (Completed)
-- [x] **Ball Possession Engine:** Frame-by-frame dynamic player & team ball ownership, possession percentage (`%`), continuous possession timeline, and team control spells
-- [x] **Physics-Verified Individual Pass Breakdown:** Kinematic aerial fly-over rejection + exact kick-to-reception timing for both **Completed** and **Incomplete / Intercepted** passes — outputting **From → To player IDs**, pass type (`Long Switch`, `Box Entry`, `Progressive`, `Short`, `Intercepted`), perspective-calibrated **length (m)** on a $105\text{m} \times 68\text{m}$ FIFA pitch, **average & peak ball speed (km/h)**, and **1 dedicated 2D freeze-frame visual per pass** showing the actual ball trajectory and all 22 players
-- [x] **Turnovers, Interceptions & Recoveries:** Opponent possession transitions, ball-winner attribution, and high-turnover zone mapping
-- [x] **Shots, Crosses & Final-Third / Box Entries:** High-velocity goal-mouth ball vector spotting, flank crosses, and penalty-area entries
+<p align="center">
+  <img src="docs/assets/dashboard_pass_completed.png" alt="A completed pass in the inspector" width="49%">
+  <img src="docs/assets/dashboard_pass_intercepted.png" alt="An intercepted pass in the inspector" width="49%">
+</p>
+<p align="center"><sub><b>Left:</b> a completed 24.6 m pass (#2 → #3). <b>Right:</b> a pass by #7 intercepted by opponent #20 — shown with a dashed red ball path and a ✕.</sub></p>
 
-### 📍 Phase 3: Advanced Physical & Tactical Metrics
-- [x] **Core Physical Metrics:** Estimated distance covered (`m`), average speed (`km/h`), pitch presence (`%`), and tactical third/channel distribution per player
-- [ ] **Speed Zones & Sprint Analytics:** Instantaneous speed smoothing, top speed (`km/h`), high-speed running (`> 18 km/h`), and sprint counts (`> 21 km/h`)
-- [ ] **Tactical Shape Dynamics:** Defensive line height, midfield-to-defense gap, team compactness over time, and pressing intensity (nearest-defender pressure distance)
+### 2 · Every pass on one pitch + full telemetry log
+All passes of the clip on a single map (numbered circle = where it was kicked, green = completed, dashed red ✕ = intercepted), plus a complete log with **From → To**, **Outcome**, **Length**, **Avg / Peak speed**, **Duration** and **Target zone**, exportable as CSV.
 
-### 📍 Phase 4: Interactive Tactical Match Center
-- [x] **Minimalist Streamlit Studio (`app.py`):** Instant pre-computed dual-match loader, model switcher (`YOLO11` / `YOLOv8`), custom video upload, Team Analytics, Player Deep-Dive, H.264 annotated replay, and CSV export
-- [x] **Pass-by-Pass Tactical Inspector Tab:** Interactive single-pass 2D freeze-frame viewer (paired with real broadcast mid-pass snapshots), dual-team possession split bar, complete All-Passes telemetry table (`From → To`, `Outcome`, `Length m`, `Speed km/h`), and CSV export
-- [ ] **Automated Match Report Export:** One-click printable HTML / PDF scouting report summarizing formations, heatmaps, passing networks, and KPIs
+<p align="center">
+  <img src="docs/assets/dashboard_pass_overview.png" alt="All passes overview map" width="78%">
+</p>
+<p align="center">
+  <img src="docs/assets/dashboard_pass_log.png" alt="Pass telemetry log" width="78%">
+</p>
 
-### 📍 Phase 5: Pro-Grade Calibration (Future Stretch)
-- [ ] **Automatic Pitch Keypoint Homography:** Per-frame line/intersection keypoint detection for exact metric projective homography across any camera pan/zoom
-- [ ] **Jersey Number Recognition (OCR):** Optional cropped back-number recognition to link track IDs to real matchday squad numbers
+### 3 · Team analytics
+Average formation, convex-hull team shape, centroid, block depth/width, a collective occupancy heatmap, and channel / pitch-depth distribution — for either team or both side by side.
+
+<p align="center">
+  <img src="docs/assets/dashboard_team_home.png" alt="Team 0 analytics" width="49%">
+  <img src="docs/assets/dashboard_team_away.png" alt="Team 1 analytics" width="49%">
+</p>
+
+### 4 · Player deep-dive
+Pick any player: movement trajectory, individual heatmap, estimated distance, average speed, tactical corridor and pitch-thirds split.
+
+<p align="center">
+  <img src="docs/assets/dashboard_player_home.png" alt="Player deep-dive, Team 0" width="49%">
+  <img src="docs/assets/dashboard_player_away.png" alt="Player deep-dive, Team 1" width="49%">
+</p>
+
+---
+
+## 🧠 How It Works
+
+```mermaid
+flowchart LR
+    A["🎥 Broadcast video"] --> B["Pitch segmentation<br/>(turf mask, touchline)"]
+    B --> C["High-res YOLO<br/>players + ball"]
+    C --> D["GMC BoT-SORT<br/>+ Lab Re-ID"]
+    C --> E["Ball tracker<br/>Kalman + ROI zoom"]
+    D --> F["Team / GK / referee<br/>colour classification"]
+    F --> G["Track consolidation<br/>11v11 prior, clean IDs"]
+    E --> H["2D pitch mapping<br/>105 × 68 m"]
+    G --> H
+    H --> I["Possession & pass engine<br/>length · speed · outcome"]
+    I --> J["📊 Streamlit dashboard<br/>+ annotated H.264 replay"]
+```
+
+The pipeline runs in two passes: **Pass 1** detects, tracks and classifies (and caches the result), **Pass 2** renders the annotated video and exports the spatial data the dashboard reads.
+
+---
+
+## 🛠️ Engineering Challenges We Solved
+
+Broadcast football is a hostile environment for computer vision. These are the problems the project is built around:
+
+| Challenge | How it is handled |
+|---|---|
+| **Small, distant players** are missed by standard detectors | Detection is run on the *pitch-cropped* image at `imgsz=1280` with a low confidence floor and a second-stage recovery pass |
+| **Crowd, ad boards, dugouts, coaches** create false players | A non-convex turf mask (immune to green LED boards) plus a RANSAC white-touchline detector rejects anything off the pitch |
+| **Camera pans reshuffle IDs** | BoT-SORT with sparse-optical-flow **camera-motion compensation**, foot-position + CIE Lab jersey Re-ID, and global tracklet consolidation with an 11-player prior |
+| **The ball is tiny, fast, often occluded** | A dedicated tracker: camera-compensated Kalman filter, native-resolution ROI zoom, motion/white-blob recovery and **penalty-spot rejection** |
+| **White kits vs. white ad boards / lime-green kits vs. turf** | Local-turf-subtracted colour extraction and lopsided-cluster protection in K-Means |
+| **A long ball flying over a bystander** looks like a touch | A kinematic *fly-over filter* checks the ball's speed and bend before, during and after the contact |
+| **Passes measured between control halos give absurd speeds** | Exact *kick* and *reception* frames are pinpointed, so speed uses true flight time |
+
+---
+
+## 📊 Results on the Demo Clips
+
+| | `sample.mp4` (broadcast) | `sample2.mp4` (wide tactical) |
+|---|:---:|:---:|
+| Players tracked | **22** (11 v 11) | **22** (11 v 11) |
+| Ball coverage | **94.9 %** (712 / 750 frames) | ~85–91 % |
+| Passes detected | **9** (8 completed · 1 intercepted) | **5** (4 completed · 1 intercepted) |
+| Pass accuracy | 88.9 % | 80.0 % |
+| Avg pass length / speed | 24.0 m · 52.9 km/h | 29.1 m · 39.6 km/h |
+| Longest pass | **53.0 m** cross-field switch | — |
+
+> These are short 30-second clips used to validate the pipeline; the numbers illustrate behaviour, not a formal benchmark.
+
+### How pass length and speed are measured
+1. The exact frame the ball **leaves the passer's foot** and the frame it **reaches the receiver / interceptor** are pinpointed.
+2. Camera coordinates are mapped onto a 105 × 68 m pitch using a perspective-aware projection.
+3. **Length** = straight distance between those two points; **speed** = ball-path distance ÷ true flight time (average and peak are both reported).
+
+---
+
+## 🚀 Quick Start
+
+```bash
+git clone https://github.com/omerfarukyuce/Footballistic.git
+cd Footballistic
+
+python -m venv venv
+venv\Scripts\activate          # Windows   (Linux/macOS: source venv/bin/activate)
+pip install -r requirements.txt
+```
+
+**1. Add a match clip** (any wide-angle / broadcast `.mp4`) under `data/sample_videos/`, and a YOLO checkpoint such as `yolo11m.pt` under `weights/`.
+A helper is included for the demo clip: `python scripts/download_sample.py`.
+
+**2. Run the pipeline** (≈ minutes on CPU for a 30 s clip):
+```bash
+python main.py --video data/sample_videos/sample.mp4 --output output
+```
+
+**3. Open the dashboard:**
+```bash
+streamlit run app.py
+```
+
+From the dashboard you can switch between processed matches, upload your own video, choose `YOLO11m` or `YOLOv8m`, inspect passes one by one, explore team and player analytics, watch the annotated replay and export everything to CSV.
+
+> Processed outputs (`output*/`) and large media are git-ignored, so run step 2 once before launching the dashboard.
+
+---
+
+## 🗺️ Roadmap
+
+### Phase 1 — Core vision pipeline ✅
+- [x] Pitch-cropped, high-resolution YOLO detection with turf / touchline / LED-board immunity
+- [x] Camera-motion-compensated BoT-SORT with Lab Re-ID and 11 v 11 consolidation
+- [x] Dedicated ball tracker with white comet trail
+- [x] Team, goalkeeper and referee classification
+- [x] 2D pitch mapping, formations, heatmaps and an H.264 annotated replay
+
+### Phase 2 — Events & pass intelligence ✅
+- [x] Possession engine (player & team ownership, possession %)
+- [x] Physics-verified individual passes — completed **and** intercepted — with length, speed, duration and a freeze-frame per pass
+- [x] Interceptions / recoveries, progressive passes, final-third and box entries
+
+### Phase 3 — Physical & tactical metrics 🚧
+- [x] Distance, average speed, pitch presence, tactical thirds and channels
+- [ ] Speed zones, top speed, sprint and high-intensity-run counts
+- [ ] Defensive-line height, compactness over time, pressing intensity
+
+### Phase 4 — Match centre 🚧
+- [x] Minimal Streamlit studio: pass inspector, overview map, telemetry log, team & player analytics, CSV export
+- [ ] One-click printable PDF / HTML scouting report
+
+### Phase 5 — Pro-grade calibration (future)
+- [ ] Automatic pitch-keypoint homography for exact metric projection across any pan / zoom
+- [ ] Jersey-number OCR to link track IDs to real squad numbers
+
+---
+
+## ⚠️ Current Limitations
+
+Being upfront about what the system does **not** do yet:
+
+- The pitch mapping is a perspective-aware approximation, **not** a per-frame keypoint homography — distances and speeds are estimates, most reliable near mid-pitch.
+- The ball is tracked in 2D; aerial height is not modelled, so lofted passes are measured along the ground projection.
+- Player IDs are stable *labels* (`#1`–`#22`), not real shirt numbers.
+- Evaluated on short clips from two camera setups — broader validation is on the roadmap.
+- Runs on CPU by default; a GPU makes the pipeline much faster.
 
 ---
 
@@ -55,92 +210,29 @@ Traditional match analytics (e.g., Opta, StatsBomb) rely heavily on human annota
 
 ```text
 Footballistic/
-├── configs/
-│   ├── football_botsort.yaml       # GMC BoT-SORT config (sparseOptFlow + 120f buffer)
-│   └── football_bytetrack.yaml     # Legacy ByteTrack config
-├── data/
-│   └── sample_videos/              # Tactical wide-angle & broadcast sample clips
-├── weights/                        # YOLO11m / YOLOv8m model checkpoints
+├── .streamlit/config.toml            # Dashboard theme
+├── configs/football_botsort.yaml     # GMC BoT-SORT configuration
+├── docs/assets/                      # README screenshots & demo clip
+├── scripts/download_sample.py        # Demo clip helper
 ├── src/
-│   ├── detection/
-│   │   ├── detector.py             # High-res pitch-cropped YOLO + 1:1 ROI ball zoom
-│   │   └── pitch_detector.py       # Non-convex turf mask & RANSAC near-touchline detector
-│   ├── tracking/
-│   │   ├── football_tracker.py     # GMC BoT-SORT + Stage-3 Lab Re-ID + global stitcher
-│   │   └── ball_tracker.py         # GMC-Kalman + ROI zoom + static-spot rejection
-│   ├── team_assignment/
-│   │   └── color_assigner.py       # Grass-excluded Lab K-Means, GK & referee classifier
-│   ├── homography/
-│   │   └── pitch_view.py           # Projective 2D top-down pitch, heatmaps & formations
-│   ├── analysis/
-│   │   ├── heatmap.py              # Spatial analytics, 11v11 squad enforcement & JSON I/O
-│   │   └── events.py               # Pass telemetry (length/speed), possession & event engine
-│   └── utils/
-│       ├── drawing.py              # Broadcast ellipses, GMC-pinned trails & white ball trail
-│       └── video_utils.py          # Video streaming & PyAV H.264 encoding
-├── output/                         # Pre-computed Match 1 analytics & video
-├── output_sample2/                 # Pre-computed Match 2 analytics & video
-├── main.py                         # 2-pass computer vision pipeline entrypoint
-├── app.py                          # Streamlit interactive tactical match center
-├── requirements.txt
-└── README.md
+│   ├── detection/                    # High-res YOLO · pitch & touchline segmentation
+│   ├── tracking/                     # GMC BoT-SORT · ball tracker · track stitching
+│   ├── team_assignment/              # Lab K-Means team / GK / referee classifier
+│   ├── homography/pitch_view.py      # 2D pitch, heatmaps, per-pass freeze-frames
+│   ├── analysis/                     # Spatial metrics · possession & pass engine
+│   └── utils/                        # Broadcast drawing · H.264 video I/O
+├── main.py                           # Two-pass pipeline entrypoint
+├── app.py                            # Streamlit match centre
+└── requirements.txt
 ```
-
----
-
-## 🛠️ Installation & Setup
-
-### 1. Clone the repository
-```bash
-git clone https://github.com/omerfarukyuce/Footballistic.git
-cd Footballistic
-```
-
-### 2. Set up virtual environment
-```bash
-# Windows
-python -m venv venv
-venv\Scripts\activate
-
-# Linux / macOS
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 3. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## 🖥️ Running the Pipeline & Interactive Web Dashboard
-
-### Run the 2-pass CV pipeline on a video
-```bash
-python main.py --video data/sample_videos/sample2.mp4 --output output_sample2 --frames 0
-```
-
-### Launch the interactive Streamlit Match Center
-```bash
-streamlit run app.py
-```
-
-From the dashboard, you can:
-- **Switch instantly** between pre-computed sample matches or **upload** your own match video.
-- **Select** between `YOLO11m` and `YOLOv8m` detection models.
-- **Inspect Team Analytics:** 11v11 2D formations, team centroids, compactness, channel preference, and collective heatmaps.
-- **Deep-Dive into Individual Players:** individual 2D trajectories, heatmaps, estimated distance, speed, and tactical zone.
-- **Watch the Annotated Replay** with stable player IDs, GMC-pinned movement trails, and a pure white ball trajectory trail, and **export** spatial data to CSV.
 
 ---
 
 ## 🤝 Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/omerfarukyuce/Footballistic/issues).
-
----
+Issues, ideas and pull requests are welcome — see the [issues page](https://github.com/omerfarukyuce/Footballistic/issues).
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE).
+Released under the [MIT License](LICENSE).
+Sample clips are short broadcast excerpts (DFL Bundesliga / Roboflow football dataset) used for demonstration purposes only.
