@@ -662,7 +662,7 @@ class PitchView2D:
         footer_h = 34
         total_h = header_h + self.height + footer_h
         full_img = np.zeros((total_h, self.width, 3), dtype=np.uint8)
-        full_img[:] = (18, 22, 31)  # Deep slate-navy broadcast frame (BGR)
+        full_img[:] = (22, 17, 14)  # Deep obsidian slate broadcast frame (BGR -> #0E1116)
 
         pitch = self.base_pitch.copy()
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -859,7 +859,7 @@ class PitchView2D:
         full_img[header_h:header_h + self.height, :] = pitch
 
         # ------------------------------------------------------- 4. DRAW BROADCAST TOP HUD BANNER
-        cv2.line(full_img, (0, header_h - 1), (self.width, header_h - 1), (55, 65, 82), 2)
+        cv2.line(full_img, (0, header_h - 1), (self.width, header_h - 1), (46, 39, 34), 1)
 
         # Left block: PASS #N + Team + From -> To
         t_col = team_colors.get(team_id, (200, 200, 200))
@@ -896,8 +896,8 @@ class PitchView2D:
             (974, 1036, "TIME", f"{pass_ev['duration_sec']:.2f}s"),
         ]
         for mx1, mx2, m_lbl, m_val in metrics_hud:
-            cv2.rectangle(full_img, (mx1, 18), (mx2, 66), (28, 35, 48), -1)
-            cv2.rectangle(full_img, (mx1, 18), (mx2, 66), (62, 74, 94), 1)
+            cv2.rectangle(full_img, (mx1, 18), (mx2, 66), (32, 25, 21), -1)
+            cv2.rectangle(full_img, (mx1, 18), (mx2, 66), (56, 46, 39), 1)
             cx_m = (mx1 + mx2) // 2
             (lw, lh), _ = cv2.getTextSize(m_lbl, font, 0.34, 1)
             (vw, vh), _ = cv2.getTextSize(m_val, font, 0.48, 2)
@@ -922,3 +922,71 @@ class PitchView2D:
         cv2.putText(full_img, "Receiver Run  |  FIFA 105m x 68m", (716, fy), font, 0.38, (165, 178, 196), 1, cv2.LINE_AA)
 
         return full_img
+
+    def draw_2d_all_passes_overview(self, all_passes: List[Dict], team_filter: Optional[int] = None) -> np.ndarray:
+        """
+        Overview map of EVERY detected pass on one pitch:
+          - Each pass = one arrow along the real ball path, drawn from kick point to reception point.
+          - Arrow colour: green = completed, red dashed = incomplete / intercepted.
+          - Numbered badge on the starting point (the badge colour = passing team) matches the
+            'Pass #' in the telemetry table and the pass selector.
+          - Header + legend explain how to read the map.
+        """
+        header_h, footer_h = 64, 34
+        img = np.zeros((header_h + self.height + footer_h, self.width, 3), dtype=np.uint8)
+        img[:] = (22, 17, 14)  # Deep obsidian slate (BGR -> #0E1116)
+        pitch = self.base_pitch.copy()
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        team_colors = {0: (45, 55, 235), 1: (235, 135, 30)}
+        ok_col, bad_col = (110, 245, 85), (70, 85, 255)
+
+        shown = [p for p in all_passes if team_filter is None or p["team_id"] == team_filter]
+        for p in shown:
+            is_ok = bool(p["is_completed"])
+            col = ok_col if is_ok else bad_col
+            pts = [(int(round(x)), int(round(y))) for x, y in p.get("ball_path_2d", [p["start_2d"], p["end_2d"]])]
+            if len(pts) < 2:
+                continue
+            # Simplified straight kick->reception arrow keeps the overview readable
+            a, b = pts[0], pts[-1]
+            if is_ok:
+                cv2.arrowedLine(pitch, a, b, (15, 15, 15), 6, cv2.LINE_AA, tipLength=0.05)
+                cv2.arrowedLine(pitch, a, b, col, 3, cv2.LINE_AA, tipLength=0.05)
+            else:
+                d = float(np.hypot(b[0] - a[0], b[1] - a[1]))
+                n = max(2, int(d // 14))
+                for i in range(0, n, 2):
+                    q1 = (int(a[0] + (b[0] - a[0]) * i / n), int(a[1] + (b[1] - a[1]) * i / n))
+                    q2 = (int(a[0] + (b[0] - a[0]) * min(i + 1, n) / n), int(a[1] + (b[1] - a[1]) * min(i + 1, n) / n))
+                    cv2.line(pitch, q1, q2, (15, 15, 15), 6, cv2.LINE_AA)
+                    cv2.line(pitch, q1, q2, col, 3, cv2.LINE_AA)
+                cv2.line(pitch, (b[0] - 8, b[1] - 8), (b[0] + 8, b[1] + 8), col, 3, cv2.LINE_AA)
+                cv2.line(pitch, (b[0] - 8, b[1] + 8), (b[0] + 8, b[1] - 8), col, 3, cv2.LINE_AA)
+
+        for p in shown:
+            a = (int(round(p["start_2d"][0])), int(round(p["start_2d"][1])))
+            tc = team_colors.get(int(p["team_id"]), (200, 200, 200))
+            cv2.circle(pitch, a, 14, (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(pitch, a, 12, tc, -1, cv2.LINE_AA)
+            lbl = str(p["pass_number"])
+            (tw, th), _ = cv2.getTextSize(lbl, font, 0.42, 1)
+            cv2.putText(pitch, lbl, (a[0] - tw // 2, a[1] + th // 2), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+
+        img[header_h:header_h + self.height] = pitch
+
+        n_ok = sum(1 for p in shown if p["is_completed"])
+        cv2.putText(img, "ALL PASSES  -  MATCH OVERVIEW", (24, 28), font, 0.62, (245, 248, 255), 2, cv2.LINE_AA)
+        cv2.putText(img, f"{len(shown)} passes  |  {n_ok} completed  |  {len(shown) - n_ok} incomplete    "
+                         "Numbered circle = where the pass was kicked (matches Pass # in table)",
+                    (24, 52), font, 0.42, (170, 184, 204), 1, cv2.LINE_AA)
+
+        fy = header_h + self.height + 22
+        cv2.circle(img, (26, fy - 4), 6, team_colors[0], -1, cv2.LINE_AA)
+        cv2.putText(img, "Team 0 passer", (38, fy), font, 0.38, (210, 218, 230), 1, cv2.LINE_AA)
+        cv2.circle(img, (176, fy - 4), 6, team_colors[1], -1, cv2.LINE_AA)
+        cv2.putText(img, "Team 1 passer", (188, fy), font, 0.38, (210, 218, 230), 1, cv2.LINE_AA)
+        cv2.line(img, (330, fy - 4), (358, fy - 4), ok_col, 3, cv2.LINE_AA)
+        cv2.putText(img, "Completed (arrow = ball direction)", (366, fy), font, 0.38, (210, 218, 230), 1, cv2.LINE_AA)
+        cv2.line(img, (640, fy - 4), (668, fy - 4), bad_col, 3, cv2.LINE_AA)
+        cv2.putText(img, "Incomplete (X = where it was lost)", (676, fy), font, 0.38, (210, 218, 230), 1, cv2.LINE_AA)
+        return img
