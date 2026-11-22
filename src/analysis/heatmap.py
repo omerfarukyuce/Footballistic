@@ -358,6 +358,146 @@ class SpatialAnalytics:
             coords.extend(positions)
         return coords
 
+    def _get_global_pan_drift_m(self) -> Dict[int, Tuple[float, float]]:
+        """
+        Estimates per-frame camera-pan drift in 2D pitch meters as the robust
+        median displacement (dx_m, dy_m) across all visible non-GK players on
+        consecutive frames. Subtracting this drift removes broadcast pan leakage
+        from individual player distance and speed telemetry.
+        """
+        cache_key = (len(self.player_tracks_2d), self.total_processed_frames)
+        if getattr(self, "_pan_cache_key", None) == cache_key and hasattr(self, "_pan_cache"):
+            return self._pan_cache
+
+        scale_x = self.PITCH_LENGTH_M / max(1.0, self.FIELD_W)
+        scale_y = self.PITCH_WIDTH_M / max(1.0, self.FIELD_H)
+        fmap: Dict[int, Dict[int, Tuple[float, float]]] = {}
+
+        for pid, frs in self.player_frames.items():
+            if pid in self.goalkeeper_ids:
+                continue
+            pts = self.player_tracks_2d.get(pid, [])
+            cams = self.player_tracks.get(pid, [])
+            for idx_f, (f, pt) in enumerate(zip(frs, pts)):
+                if idx_f < len(cams) and abs(cams[idx_f][0] - 100.0) < 1e-3 and abs(cams[idx_f][1] - 100.0) < 1e-3:
+                    continue
+                fmap.setdefault(int(f), {})[pid] = (pt[0] * scale_x, pt[1] * scale_y)
+
+        frames_sorted = sorted(fmap.keys())
+        pan: Dict[int, Tuple[float, float]] = {}
+        for i in range(1, len(frames_sorted)):
+            f0, f1 = frames_sorted[i - 1], frames_sorted[i]
+            if f1 - f0 != 1:
+                continue
+            dxs, dys = [], []
+            m0, m1 = fmap[f0], fmap[f1]
+            for pid, p1 in m1.items():
+                if pid in m0:
+                    dxs.append(p1[0] - m0[pid][0])
+                    dys.append(p1[1] - m0[pid][1])
+            if len(dxs) >= 6:
+                pan[f1] = (float(np.median(dxs)), float(np.median(dys)))
+
+        self._pan_cache_key = cache_key
+        self._pan_cache = pan
+        return pan
+
+    def get_player_kinematics(self, tracker_id: int, fps: float = 25.0) -> Dict:
+        """
+        Computes pan-compensated, temporally smoothed physical kinematics
+        (distance covered, average speed, peak speed, and instantaneous speed series)
+        for `tracker_id`.
+        """
+        positions_2d = self.player_tracks_2d.get(tracker_id, [])
+        cams = self.player_tracks.get(tracker_id, [])
+        frames = self.player_frames.get(tracker_id, list(range(len(positions_2d))))
+
+        if len(positions_2d) < 3 or fps <= 0:
+            return {
+                "distance_m": 0.0,
+                "avg_speed_kmh": 0.0,
+                "top_speed_kmh": 0.0,
+                "speeds_kmh": [],
+                "dt_sec": [],
+                "valid_frames": [],
+            }
+
+        # Filter out synthesized placeholder tracks (cam == (100.0, 100.0))
+        real_pts = []
+        real_frs = []
+        for idx_p, (pt, fr) in enumerate(zip(positions_2d, frames)):
+            if idx_p < len(cams) and abs(cams[idx_p][0] - 100.0) < 1e-3 and abs(cams[idx_p][1] - 100.0) < 1e-3:
+                continue
+            real_pts.append(pt)
+            real_frs.append(int(fr))
+
+        if len(real_pts) < 3:
+            return {
+                "distance_m": 0.0,
+                "avg_speed_kmh": 0.0,
+                "top_speed_kmh": 0.0,
+                "speeds_kmh": [],
+                "dt_sec": [],
+                "valid_frames": [],
+            }
+
+        scale_x = self.PITCH_LENGTH_M / max(1.0, self.FIELD_W)
+        scale_y = self.PITCH_WIDTH_M / max(1.0, self.FIELD_H)
+        pan = self._get_global_pan_drift_m()
+
+        # Reconstruct camera-pan-compensated cumulative 2D path in meters
+        cx, cy = 0.0, 0.0
+        comp_pts = [(real_pts[0][0] * scale_x, real_pts[0][1] * scale_y)]
+        valid_step = []
+        for i in range(1, len(real_pts)):
+            f0, f1 = real_frs[i - 1], real_frs[i]
+            df = max(1, f1 - f0)
+            dx = (real_pts[i][0] - real_pts[i - 1][0]) * scale_x
+            dy = (real_pts[i][1] - real_pts[i - 1][1]) * scale_y
+            if df == 1 and f1 in pan:
+                dx -= pan[f1][0]
+                dy -= pan[f1][1]
+            # Ignore multi-frame re-entry jumps (> 5 frames) or impossible teleports (> 40 km/h)
+            is_ok_step = (df <= 5) and (math.hypot(dx, dy) / df <= (40.0 / 3.6) / fps)
+            if is_ok_step:
+                cx += dx
+                cy += dy
+            valid_step.append(is_ok_step)
+            comp_pts.append((comp_pts[0][0] + cx, comp_pts[0][1] + cy))
+
+        arr = np.asarray(comp_pts, dtype=np.float64)
+        # Centered ~0.5s moving-average filter eliminates single-frame YOLO foot jitter
+        win = min(13, len(arr) if len(arr) % 2 == 1 else len(arr) - 1)
+        if win >= 3:
+            pad = win // 2
+            sm_x = np.convolve(np.pad(arr[:, 0], pad, mode="edge"), np.ones(win) / win, mode="valid")
+            sm_y = np.convolve(np.pad(arr[:, 1], pad, mode="edge"), np.ones(win) / win, mode="valid")
+        else:
+            sm_x, sm_y = arr[:, 0], arr[:, 1]
+
+        sm_steps = np.hypot(np.diff(sm_x), np.diff(sm_y))
+        dt_arr = np.maximum(1, np.diff(real_frs)).astype(np.float64) / fps
+        valid_mask = np.asarray(valid_step, dtype=bool)
+        raw_kmh = np.where(valid_mask, np.minimum((sm_steps / dt_arr) * 3.6, 35.5), 0.0)
+
+        # Dead-zone below 1.2 km/h removes stationary standing micro-jitter
+        eff_mask = valid_mask & (raw_kmh >= 1.2)
+        distance_m = float(np.sum((raw_kmh / 3.6) * dt_arr * eff_mask))
+        active_seconds = float(np.sum(dt_arr[valid_mask])) if np.any(valid_mask) else (len(real_pts) / fps)
+        avg_speed_kmh = (distance_m / max(0.1, active_seconds)) * 3.6
+
+        valid_spds = raw_kmh[valid_mask]
+        top_speed_kmh = float(np.percentile(valid_spds, 99)) if len(valid_spds) >= 5 else (float(np.max(valid_spds)) if len(valid_spds) else 0.0)
+
+        return {
+            "distance_m": round(distance_m, 1),
+            "avg_speed_kmh": round(avg_speed_kmh, 1),
+            "top_speed_kmh": round(top_speed_kmh, 1),
+            "speeds_kmh": raw_kmh.tolist(),
+            "dt_sec": dt_arr.tolist(),
+            "valid_frames": real_frs[1:],
+        }
+
     def get_player_metrics(self, tracker_id: int, fps: float = 25.0) -> Dict:
         """
         Calculates comprehensive physical and tactical metrics for a specific player.
@@ -367,21 +507,13 @@ class SpatialAnalytics:
         total_f = max(1, self.total_processed_frames)
         frames_active = len(positions_2d)
 
-        # 1. Physical Distance Calculation (2D pixels to meters)
+        # 1. Pan-Compensated, Smoothed Physical Kinematics
         scale_x = self.PITCH_LENGTH_M / max(1.0, self.FIELD_W)
         scale_y = self.PITCH_WIDTH_M / max(1.0, self.FIELD_H)
-
-        distance_m = 0.0
-        for i in range(1, len(positions_2d)):
-            dx_m = (positions_2d[i][0] - positions_2d[i - 1][0]) * scale_x
-            dy_m = (positions_2d[i][1] - positions_2d[i - 1][1]) * scale_y
-            step_dist = math.hypot(dx_m, dy_m)
-            # Filter teleporting glitches / ID jumps (> 4.5m in a single frame is physically impossible)
-            if step_dist < 4.5:
-                distance_m += step_dist
-
-        active_seconds = frames_active / fps if fps > 0 else 1.0
-        avg_speed_kmh = (distance_m / max(0.1, active_seconds)) * 3.6 if active_seconds > 0 else 0.0
+        kin = self.get_player_kinematics(tracker_id, fps=fps)
+        distance_m = kin["distance_m"]
+        avg_speed_kmh = kin["avg_speed_kmh"]
+        top_speed_kmh = kin["top_speed_kmh"]
 
         # 2. Average Position
         if len(positions_2d) > 0:
@@ -446,6 +578,7 @@ class SpatialAnalytics:
             "presence_pct": round((frames_active / total_f) * 100, 1),
             "distance_m": round(distance_m, 1),
             "avg_speed_kmh": round(avg_speed_kmh, 1),
+            "top_speed_kmh": round(top_speed_kmh, 1),
             "avg_pos_2d": (round(avg_x, 1), round(avg_y, 1)),
             "pos_meters": (round(xm, 1), round(ym, 1)),
             "tactical_zone": tactical_role,

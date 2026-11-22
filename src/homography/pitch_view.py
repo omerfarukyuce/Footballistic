@@ -332,28 +332,12 @@ class PitchView2D:
             cv2.addWeighted(overlay, 0.18, canvas, 0.82, 0, canvas)
             cv2.drawContours(canvas, [hull], 0, color, 2, cv2.LINE_AA)
 
-        # 2. Draw team centroid (average position)
-        centroid_x = float(np.mean(pts_arr[:, 0]))
-        centroid_y = float(np.mean(pts_arr[:, 1]))
-        cc_pt = (int(round(centroid_x)), int(round(centroid_y)))
-
-        # Tactical centroid crosshair & star
-        cv2.circle(canvas, cc_pt, 12, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.line(canvas, (cc_pt[0] - 16, cc_pt[1]), (cc_pt[0] + 16, cc_pt[1]), (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.line(canvas, (cc_pt[0], cc_pt[1] - 16), (cc_pt[0], cc_pt[1] + 16), (255, 255, 255), 2, cv2.LINE_AA)
-
-        cx_m, cy_m = self.pitch_to_meters(centroid_x, centroid_y)
-        centroid_label = f"Team Centroid ({cx_m}m, {cy_m}m)"
+        # 2. Draw each player first so centroid callout never sits behind a player badge
         font = cv2.FONT_HERSHEY_SIMPLEX
-        (clw, clh), _ = cv2.getTextSize(centroid_label, font, 0.42, 1)
-        cl_x = max(10, min(self.width - clw - 15, cc_pt[0] - clw // 2))
-        cl_y = max(clh + 10, cc_pt[1] - 20)
-        cv2.rectangle(canvas, (cl_x - 3, cl_y - clh - 3), (cl_x + clw + 3, cl_y + 3), (15, 15, 15), -1)
-        cv2.putText(canvas, centroid_label, (cl_x, cl_y), font, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
-
-        # 3. Draw each player
+        occupied_boxes: List[Tuple[int, int, int, int]] = []
         for p_id, (px, py) in zip(team_pids, team_pts):
             center = (int(round(px)), int(round(py)))
+            occupied_boxes.append((center[0] - 19, center[1] - 19, center[0] + 19, center[1] + 19))
             is_gk = p_id in (1, 13) or str(p_id) in ("1", "13")
             if is_gk:
                 # Golden keeper halo
@@ -374,6 +358,59 @@ class PitchView2D:
                 1,
                 cv2.LINE_AA
             )
+
+        # 3. Draw team centroid crosshair & collision-free callout pill on top
+        centroid_x = float(np.mean(pts_arr[:, 0]))
+        centroid_y = float(np.mean(pts_arr[:, 1]))
+        cc_pt = (int(round(centroid_x)), int(round(centroid_y)))
+        occupied_boxes.append((cc_pt[0] - 18, cc_pt[1] - 18, cc_pt[0] + 18, cc_pt[1] + 18))
+
+        cv2.circle(canvas, cc_pt, 12, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.line(canvas, (cc_pt[0] - 16, cc_pt[1]), (cc_pt[0] + 16, cc_pt[1]), (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.line(canvas, (cc_pt[0], cc_pt[1] - 16), (cc_pt[0], cc_pt[1] + 16), (255, 255, 255), 2, cv2.LINE_AA)
+
+        cx_m, cy_m = self.pitch_to_meters(centroid_x, centroid_y)
+        centroid_label = f"Centroid ({cx_m}m, {cy_m}m)"
+        (clw, clh), _ = cv2.getTextSize(centroid_label, font, 0.42, 1)
+
+        # Evaluate clean candidate positions around crosshair and pick lowest overlap
+        cand_offsets = [
+            (0, -34),
+            (0, 38),
+            (clw // 2 + 28, 5),
+            (-(clw // 2 + 28), 5),
+            (clw // 2 + 22, -34),
+            (-(clw // 2 + 22), -34),
+            (clw // 2 + 22, 38),
+            (-(clw // 2 + 22), 38),
+            (0, -64),
+            (0, 68),
+        ]
+        best_xy = (cc_pt[0] - clw // 2, cc_pt[1] - 24)
+        best_pen = 1e12
+        for ox, oy in cand_offsets:
+            bx = int(np.clip(cc_pt[0] + ox - clw // 2, self.field_x1 + 10, self.field_x2 - clw - 10))
+            by = int(np.clip(cc_pt[1] + oy + clh // 2, self.field_y1 + clh + 10, self.field_y2 - 10))
+            rx1, ry1, rx2, ry2 = bx - 6, by - clh - 5, bx + clw + 6, by + 5
+            pen = 0.0
+            for ox1, oy1, ox2, oy2 in occupied_boxes:
+                iw = max(0, min(rx2, ox2) - max(rx1, ox1))
+                ih = max(0, min(ry2, oy2) - max(ry1, oy1))
+                pen += iw * ih * 10.0
+            pen += float(np.hypot((rx1 + rx2) * 0.5 - cc_pt[0], (ry1 + ry2) * 0.5 - cc_pt[1])) * 0.5
+            if pen < best_pen:
+                best_pen = pen
+                best_xy = (bx, by)
+
+        cl_x, cl_y = best_xy
+        # Subtle leader line if pill shifted slightly away from crosshair
+        pill_cx = cl_x + clw // 2
+        pill_cy = cl_y - clh // 2
+        if np.hypot(pill_cx - cc_pt[0], pill_cy - cc_pt[1]) > 38.0:
+            cv2.line(canvas, cc_pt, (pill_cx, pill_cy), (220, 225, 235), 1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (cl_x - 6, cl_y - clh - 5), (cl_x + clw + 6, cl_y + 5), (22, 17, 14), -1)
+        cv2.rectangle(canvas, (cl_x - 6, cl_y - clh - 5), (cl_x + clw + 6, cl_y + 5), color, 1)
+        cv2.putText(canvas, centroid_label, (cl_x, cl_y), font, 0.42, (248, 250, 252), 1, cv2.LINE_AA)
 
         return canvas
 

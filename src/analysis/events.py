@@ -850,7 +850,7 @@ class MatchEventEngine:
             to_str = (
                 f"#{p['target_id']}"
                 if p["is_completed"]
-                else f"#{p['target_id']} (Opp. Interception)"
+                else f"#{p['target_id']} (Intercepted)"
             )
             status_str = "✅ Completed" if p["is_completed"] else "❌ Incomplete"
             rows.append({
