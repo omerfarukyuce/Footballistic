@@ -177,10 +177,10 @@ streamlit run app.py
 - [x] Physics-verified pass detection (completed and intercepted) with calibrated length, speed, and per-pass 2D freeze-frame visuals
 - [x] Interceptions, ball recoveries, progressive passes, final-third entries, and box entries
 
-### Phase 3 &mdash; Physical & Tactical Metrics &nbsp;`In Progress`
-- [x] Estimated distance covered, average speed, pitch presence, and third/channel splits
-- [ ] Instantaneous speed zones, top speed, high-speed running, and sprint counts
-- [ ] Time-series defensive line height, block compactness dynamics, and pressing pressure distance
+### Phase 3 &mdash; Physical & Tactical Metrics &nbsp;`Completed`
+- [x] Pan-compensated, smoothed distance covered, average speed, pitch presence, and third/channel splits
+- [x] FIFA 5-zone speed breakdown (Walking through Sprinting), peak speed, peak acceleration, HSR (`> 18 km/h`), sprint counts (`>= 21 km/h`), and instantaneous velocity profile charts
+- [x] Time-series defensive line height, midfield-to-defense gap, outfield block compactness envelope, and ball-carrier pressing intensity (`<= 4.5 m` high-press zone)
 
 ### Phase 4 &mdash; Interactive Match Centre &nbsp;`In Progress`
 - [x] Minimalist Obsidian dark Streamlit workspace with pass inspector (`←`/`→`), match overview map, telemetry log, and CSV export
@@ -215,7 +215,7 @@ Footballistic/
 │   ├── tracking/                     # GMC BoT-SORT · ball tracker · global stitcher
 │   ├── team_assignment/              # Lab K-Means team, GK & referee classifier
 │   ├── homography/pitch_view.py      # 2D pitch, heatmaps, single-pass & overview visuals
-│   ├── analysis/                     # Spatial analytics · possession & pass engine
+│   ├── analysis/                     # Spatial metrics · possession/pass · speed zones & pressing
 │   └── utils/                        # Broadcast visualizer · PyAV H.264 encoder
 ├── main.py                           # Two-pass CV pipeline entrypoint
 ├── app.py                            # Streamlit Match Centre UI

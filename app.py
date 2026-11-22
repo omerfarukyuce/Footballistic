@@ -14,6 +14,14 @@ import streamlit as st
 
 from src.analysis.heatmap import SpatialAnalytics
 from src.analysis.events import MatchEventEngine
+from src.analysis.tactical_physical import (
+    PhysicalPerformanceEngine,
+    TacticalDynamicsEngine,
+    SPEED_ZONES,
+    render_player_speed_chart,
+    render_tactical_shape_chart,
+    render_pressing_chart,
+)
 from src.homography.pitch_view import PitchView2D
 
 
@@ -685,6 +693,34 @@ def render_distribution_strip(blocks: List[Tuple[str, List[Tuple[str, float, str
     st.markdown(f'<div class="dist-row" style="grid-template-columns:{cols};">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 
+def render_speed_zone_card(profile: Dict):
+    """Renders the FIFA 5-zone speed breakdown bar with distance (m) and share (%)."""
+    bars = []
+    cells = []
+    for name, lo, hi, col in SPEED_ZONES:
+        dist = profile["zone_distance_m"].get(name, 0.0)
+        pct = profile["zone_pct"].get(name, 0.0)
+        rng = f"≥ {int(lo)}" if hi >= 90 else f"{int(lo)}–{int(hi)}"
+        if pct > 0.2:
+            bars.append(f'<div style="width:{pct}%; background:{col}; border-radius:2px;"></div>')
+        cells.append(
+            f'<div style="display:flex; flex-direction:column; gap:2px;">'
+            f'<span style="font-size:0.68rem; color:#8A93A5; display:flex; align-items:center; gap:5px;">'
+            f'<span style="width:7px; height:7px; border-radius:50%; background:{col}; display:inline-block;"></span>{name} ({rng})</span>'
+            f'<span style="font-family:\'JetBrains Mono\',monospace; font-size:0.86rem; font-weight:600; color:#F3F5F8;">'
+            f'{dist:.1f} m <span style="font-size:0.72rem; color:#64748B; font-weight:500;">({pct:.0f}%)</span></span>'
+            f'</div>'
+        )
+    st.markdown(
+        f'<div class="dist-card" style="margin:10px 0 14px 0;">'
+        f'<div class="dist-head">FIFA Speed Zones Breakdown (km/h)</div>'
+        f'<div class="dist-bar" style="height:7px; margin-bottom:12px;">{"".join(bars)}</div>'
+        f'<div style="display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:10px;">{"".join(cells)}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_possession_bar(poss: Dict):
     p0 = poss["team0_possession_pct"]
     p1 = poss["team1_possession_pct"]
@@ -924,6 +960,11 @@ spatial_analytics: SpatialAnalytics = results["spatial_analytics"]
 pitch_view: PitchView2D = results.get("pitch_view") or PitchView2D(1050, 680)
 avg_pos_2d = spatial_analytics.get_average_positions_2d(min_frames=1, max_per_team=11)
 
+# Shared Phase 2 & Phase 3 engines (computed once per rerun)
+event_engine = MatchEventEngine(spatial_analytics, fps=25.0)
+physical_engine = PhysicalPerformanceEngine(spatial_analytics, fps=25.0)
+tactical_engine = TacticalDynamicsEngine(spatial_analytics, event_engine=event_engine, fps=25.0)
+
 tab_team, tab_events, tab_player, tab_media = st.tabs([
     "Team Analytics",
     "Passing & Events",
@@ -977,6 +1018,25 @@ with tab_team:
             )
             st.image(cv2.cvtColor(all_heat, cv2.COLOR_BGR2RGB), use_column_width=True)
 
+        # ---- Phase 3: Comparative Tactical Shape Dynamics & Pressing ----
+        td0, td1 = tactical_engine.summary[0], tactical_engine.summary[1]
+        render_section_header(
+            "02",
+            "Structural Dynamics & Pressing Intensity",
+            "Time-series defensive line height, outfield compactness, and nearest-opponent ball pressure",
+        )
+        render_kpi_strip([
+            ("Team 0 Def. Line", f"{td0['avg_def_line_m']} m", f"Block {td0['avg_block_length_m']}m · Gap {td0['avg_def_mid_gap_m']}m", "dot-home"),
+            ("Team 1 Def. Line", f"{td1['avg_def_line_m']} m", f"Block {td1['avg_block_length_m']}m · Gap {td1['avg_def_mid_gap_m']}m", "dot-away"),
+            ("Team 0 Pressing", f"{td0['avg_press_dist_m']} m", f"High press (≤4.5m): {td0['high_press_pct']}%", "dot-home"),
+            ("Team 1 Pressing", f"{td1['avg_press_dist_m']} m", f"High press (≤4.5m): {td1['high_press_pct']}%", "dot-away"),
+        ])
+        dyn_l, dyn_r = st.columns(2, gap="medium")
+        with dyn_l:
+            st.image(render_tactical_shape_chart(tactical_engine, target_team=None), use_column_width=True)
+        with dyn_r:
+            st.image(render_pressing_chart(tactical_engine, target_team=None), use_column_width=True)
+
     else:
         target_team = 0 if "Team 0" in team_view_mode else 1
         tm = spatial_analytics.get_team_metrics(target_team, min_frames=1)
@@ -1019,12 +1079,31 @@ with tab_team:
             ]),
         ])
 
+        # ---- Phase 3: Team Structural Dynamics & Pressing ----
+        td_s = tactical_engine.summary[target_team]
+        phys_t = physical_engine.get_team_physical_summary(target_team)
+        render_section_header(
+            "02",
+            f"{t_lbl} — Structural Dynamics & Pressing",
+            f"Team distance {phys_t['total_distance_m']}m · HSR {phys_t['hsr_distance_m']}m · {phys_t['total_sprints']} sprints",
+        )
+        render_kpi_strip([
+            ("Defensive Line", f"{td_s['avg_def_line_m']} m", "Mean height from own goal", dot_c),
+            ("Outfield Block", f"{td_s['avg_block_length_m']} m", f"Avg width {td_s['avg_block_width_m']} m", None),
+            ("Def–Mid Gap", f"{td_s['avg_def_mid_gap_m']} m", "Vertical line separation", None),
+            ("Press Distance", f"{td_s['avg_press_dist_m']} m", f"High press (≤4.5m): {td_s['high_press_pct']}%", "dot-accent"),
+        ])
+        dyn_l, dyn_r = st.columns(2, gap="medium")
+        with dyn_l:
+            st.image(render_tactical_shape_chart(tactical_engine, target_team=target_team), use_column_width=True)
+        with dyn_r:
+            st.image(render_pressing_chart(tactical_engine, target_team=target_team), use_column_width=True)
+
 
 # =============================================================================
 # TAB 2: PASSING & MATCH EVENTS
 # =============================================================================
 with tab_events:
-    event_engine = MatchEventEngine(spatial_analytics, fps=25.0)
     poss = event_engine.get_possession_summary()
 
     render_possession_bar(poss)
@@ -1239,16 +1318,17 @@ with tab_player:
 
         if selected_pid is not None:
             pm = spatial_analytics.get_player_metrics(selected_pid)
+            pp = physical_engine.get_player_profile(selected_pid)
             team_id = pm["team_id"]
             is_keeper = pm.get("is_goalkeeper", is_player_gk(selected_pid))
             p_dot = "dot-home" if team_id == 0 else "dot-away"
             p_label = f"#{selected_pid} GK" if is_keeper else f"#{selected_pid}"
 
             render_kpi_strip([
-                ("Player Profile", p_label, f"Team {team_id} ({'Home' if team_id == 0 else 'Away'})", p_dot),
-                ("Est. Distance", f"{pm['distance_m']} m", f"{pm['frames_active']} tracked frames", None),
-                ("Avg Speed", f"{pm['avg_speed_kmh']} km/h", f"Pitch presence {pm['presence_pct']}%", None),
-                ("Tactical Role", pm["tactical_zone"], "Primary operating corridor", None),
+                ("Player Profile", p_label, f"Team {team_id} · {pm['tactical_zone']}", p_dot),
+                ("Distance Covered", f"{pm['distance_m']} m", f"{pm['frames_active']} frames · {pm['presence_pct']}% presence", None),
+                ("Avg / Top Speed", f"{pp['avg_speed_kmh']} / {pp['top_speed_kmh']} km/h", f"Peak accel {pp['peak_accel_ms2']} m/s²", None),
+                ("High-Speed Load", f"{pp['hsr_distance_m']} m HSR", f"{pp['sprint_distance_m']} m sprint · {pp['sprint_count']} sprints", "dot-accent"),
             ])
 
             p_col1, p_col2 = st.columns(2, gap="medium")
@@ -1276,6 +1356,36 @@ with tab_player:
                     ("Attacking", pm["attacking_pct"], "#10B981"),
                 ]),
             ])
+
+            # ---- Phase 3: Speed Zones & Velocity Profile ----
+            render_section_header(
+                "02",
+                "Speed Zones & Velocity Profile",
+                f"FIFA 5-zone intensity breakdown · HSR > 18 km/h · Sprint ≥ 21 km/h",
+            )
+            render_speed_zone_card(pp)
+            st.image(render_player_speed_chart(pp, team_id), use_column_width=True)
+
+            # ---- Phase 3: Match Physical Leaderboard ----
+            lb_filter = 0 if "Team 0" in team_filter else (1 if "Team 1" in team_filter else None)
+            lb_rows = physical_engine.get_physical_leaderboard(team_filter=lb_filter)
+            render_section_header(
+                "03",
+                "Match Physical Leaderboard",
+                f"Ranked by peak velocity & distance ({len(lb_rows)} players)",
+            )
+            if lb_rows:
+                lb_df = pd.DataFrame(lb_rows)
+                st.dataframe(lb_df, use_container_width=True, height=340, hide_index=True)
+                dl_p, _ = st.columns([1.3, 4.7])
+                with dl_p:
+                    st.download_button(
+                        "Export Physical CSV",
+                        data=lb_df.to_csv(index=False).encode("utf-8"),
+                        file_name="footballistic_physical_metrics.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                    )
 
 
 # =============================================================================

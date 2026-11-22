@@ -478,7 +478,18 @@ class SpatialAnalytics:
         sm_steps = np.hypot(np.diff(sm_x), np.diff(sm_y))
         dt_arr = np.maximum(1, np.diff(real_frs)).astype(np.float64) / fps
         valid_mask = np.asarray(valid_step, dtype=bool)
-        raw_kmh = np.where(valid_mask, np.minimum((sm_steps / dt_arr) * 3.6, 35.5), 0.0)
+        raw_kmh = np.minimum((sm_steps / dt_arr) * 3.6, 35.5)
+
+        # Interpolate across isolated invalid steps so speed profiles stay continuous (no 0-spikes)
+        if np.any(valid_mask) and not np.all(valid_mask):
+            idx_all = np.arange(len(raw_kmh), dtype=np.float64)
+            raw_kmh = np.interp(idx_all, idx_all[valid_mask], raw_kmh[valid_mask])
+        elif not np.any(valid_mask):
+            raw_kmh = np.zeros_like(raw_kmh)
+
+        # Gentle 7-step (~0.28s) velocity smoothing for broadcast-clean speed profiles & peak consistency
+        if len(raw_kmh) >= 7:
+            raw_kmh = np.convolve(np.pad(raw_kmh, 3, mode="edge"), np.ones(7) / 7.0, mode="valid")
 
         # Dead-zone below 1.2 km/h removes stationary standing micro-jitter
         eff_mask = valid_mask & (raw_kmh >= 1.2)
@@ -487,7 +498,7 @@ class SpatialAnalytics:
         avg_speed_kmh = (distance_m / max(0.1, active_seconds)) * 3.6
 
         valid_spds = raw_kmh[valid_mask]
-        top_speed_kmh = float(np.percentile(valid_spds, 99)) if len(valid_spds) >= 5 else (float(np.max(valid_spds)) if len(valid_spds) else 0.0)
+        top_speed_kmh = float(np.max(valid_spds)) if len(valid_spds) else 0.0
 
         return {
             "distance_m": round(distance_m, 1),
@@ -706,6 +717,7 @@ class SpatialAnalytics:
                 "Pitch Presence (%)": pm["presence_pct"],
                 "Est. Distance (m)": pm["distance_m"],
                 "Avg Speed (km/h)": pm["avg_speed_kmh"],
+                "Top Speed (km/h)": pm["top_speed_kmh"],
                 "Tactical Zone": pm["tactical_zone"]
             })
         return summary
