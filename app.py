@@ -606,6 +606,156 @@ st.markdown("""
         font-weight: 600;
     }
 
+    /* Bespoke Obsidian Data Tables */
+    .obs-table-wrap {
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: 12px;
+        overflow: hidden;
+        margin: 8px 0 12px 0;
+    }
+    .obs-table-scroll {
+        max-height: 410px;
+        overflow-y: auto;
+        overflow-x: auto;
+    }
+    .obs-table-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .obs-table-scroll::-webkit-scrollbar-track { background: #0C0F15; }
+    .obs-table-scroll::-webkit-scrollbar-thumb { background: #222938; border-radius: 999px; }
+    .obs-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.80rem;
+    }
+    .obs-table thead th {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #131720;
+        color: #6B7280;
+        font-size: 0.64rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.085em;
+        padding: 11px 14px;
+        text-align: left;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        white-space: nowrap;
+    }
+    .obs-table thead th.num-h { text-align: right; }
+    .obs-table tbody td {
+        padding: 10px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+        color: #CBD5E1;
+        white-space: nowrap;
+        vertical-align: middle;
+    }
+    .obs-table tbody tr:last-child td { border-bottom: none; }
+    .obs-table tbody tr:hover td { background: rgba(255, 255, 255, 0.025); }
+    .obs-table tbody tr.row-active td { background: rgba(16, 185, 129, 0.085); }
+    .obs-num {
+        font-family: 'JetBrains Mono', monospace;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        color: #F3F5F8;
+        font-weight: 500;
+    }
+    .obs-muted { color: #6B7280; font-family: 'JetBrains Mono', monospace; font-size: 0.74rem; }
+    .obs-rank {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: #64748B;
+    }
+    .obs-rank-top { color: #34D399; }
+    .obs-player {
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 600;
+        color: #F8FAFC;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+    }
+    .obs-team {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.76rem;
+        color: #94A3B8;
+    }
+    .obs-pill {
+        display: inline-block;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.64rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        padding: 3px 8px;
+        border-radius: 999px;
+        text-transform: uppercase;
+    }
+    .obs-pill-ok { background: rgba(16, 185, 129, 0.14); color: #34D399; border: 1px solid rgba(16, 185, 129, 0.28); }
+    .obs-pill-miss { background: rgba(229, 72, 77, 0.14); color: #F87171; border: 1px solid rgba(229, 72, 77, 0.28); }
+    .obs-pill-tag { background: rgba(255, 255, 255, 0.05); color: #CBD5E1; border: 1px solid rgba(255, 255, 255, 0.08); text-transform: none; letter-spacing: 0; font-family: 'Inter', sans-serif; font-size: 0.72rem; font-weight: 500; }
+    .obs-bar-cell {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 3px;
+        min-width: 64px;
+    }
+    .obs-bar-track {
+        width: 64px;
+        height: 3.5px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        overflow: hidden;
+    }
+    .obs-bar-fill { height: 100%; border-radius: 999px; }
+
+    /* Compact Vertical Speed Zone + Sprint Panel */
+    .sz-card {
+        background: var(--bg-surface);
+        border: 1px solid var(--border-subtle);
+        border-radius: 12px;
+        padding: 15px 18px;
+        height: 100%;
+    }
+    .sz-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 10px;
+    }
+    .sz-row-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        font-size: 0.74rem;
+    }
+    .sz-lbl { color: #94A3B8; display: inline-flex; align-items: center; gap: 6px; font-weight: 500; }
+    .sz-val { font-family: 'JetBrains Mono', monospace; color: #F3F5F8; font-weight: 600; font-size: 0.76rem; }
+    .sz-pct { color: #64748B; font-weight: 500; font-size: 0.70rem; }
+    .sz-track { height: 5px; width: 100%; border-radius: 999px; background: rgba(255, 255, 255, 0.05); overflow: hidden; }
+    .sz-fill { height: 100%; border-radius: 999px; }
+    .sz-sprints {
+        margin-top: 12px;
+        padding-top: 10px;
+        border-top: 1px solid var(--border-subtle);
+        font-size: 0.72rem;
+        color: #8A93A5;
+    }
+    .sz-chip {
+        display: inline-block;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.68rem;
+        color: #F8FAFC;
+        background: rgba(229, 72, 77, 0.14);
+        border: 1px solid rgba(229, 72, 77, 0.30);
+        border-radius: 6px;
+        padding: 2px 7px;
+        margin: 4px 5px 0 0;
+    }
+
     /* Media & Dataframes */
     [data-testid="stImage"] img {
         border-radius: 10px;
@@ -693,30 +843,162 @@ def render_distribution_strip(blocks: List[Tuple[str, List[Tuple[str, float, str
     st.markdown(f'<div class="dist-row" style="grid-template-columns:{cols};">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 
-def render_speed_zone_card(profile: Dict):
-    """Renders the FIFA 5-zone speed breakdown bar with distance (m) and share (%)."""
-    bars = []
-    cells = []
+def render_speed_zone_panel(profile: Dict):
+    """Renders a sleek vertical FIFA 5-zone speed panel + detected sprint bursts."""
+    rows_html = []
     for name, lo, hi, col in SPEED_ZONES:
         dist = profile["zone_distance_m"].get(name, 0.0)
         pct = profile["zone_pct"].get(name, 0.0)
-        rng = f"≥ {int(lo)}" if hi >= 90 else f"{int(lo)}–{int(hi)}"
-        if pct > 0.2:
-            bars.append(f'<div style="width:{pct}%; background:{col}; border-radius:2px;"></div>')
-        cells.append(
-            f'<div style="display:flex; flex-direction:column; gap:2px;">'
-            f'<span style="font-size:0.68rem; color:#8A93A5; display:flex; align-items:center; gap:5px;">'
-            f'<span style="width:7px; height:7px; border-radius:50%; background:{col}; display:inline-block;"></span>{name} ({rng})</span>'
-            f'<span style="font-family:\'JetBrains Mono\',monospace; font-size:0.86rem; font-weight:600; color:#F3F5F8;">'
-            f'{dist:.1f} m <span style="font-size:0.72rem; color:#64748B; font-weight:500;">({pct:.0f}%)</span></span>'
+        rng = f"≥{int(lo)}" if hi >= 90 else f"{int(lo)}–{int(hi)}"
+        rows_html.append(
+            f'<div class="sz-row">'
+            f'<div class="sz-row-top">'
+            f'<span class="sz-lbl"><span style="width:7px;height:7px;border-radius:50%;background:{col};display:inline-block;"></span>{name} <span class="sz-pct">({rng} km/h)</span></span>'
+            f'<span class="sz-val">{dist:.1f} m <span class="sz-pct">· {pct:.0f}%</span></span>'
+            f'</div>'
+            f'<div class="sz-track"><div class="sz-fill" style="width:{min(100.0, pct)}%;background:{col};"></div></div>'
             f'</div>'
         )
+
+    sprints = profile.get("sprint_events", [])
+    if sprints:
+        chips = "".join(
+            f'<span class="sz-chip">{s0:.1f}–{s1:.1f}s · {pk:.1f} km/h</span>'
+            for s0, s1, pk in sprints
+        )
+        sp_html = f'<div class="sz-sprints"><div style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;color:#64748B;font-weight:600;margin-bottom:2px;">Detected Sprint Bursts ({len(sprints)})</div>{chips}</div>'
+    else:
+        sp_html = '<div class="sz-sprints"><span style="color:#5A6273;">No sustained sprint bursts (≥ 21 km/h for ≥ 0.4s) in this clip.</span></div>'
+
     st.markdown(
-        f'<div class="dist-card" style="margin:10px 0 14px 0;">'
-        f'<div class="dist-head">FIFA Speed Zones Breakdown (km/h)</div>'
-        f'<div class="dist-bar" style="height:7px; margin-bottom:12px;">{"".join(bars)}</div>'
-        f'<div style="display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:10px;">{"".join(cells)}</div>'
+        f'<div class="sz-card">'
+        f'<div class="dist-head" style="margin-bottom:12px;">FIFA 5-Zone Intensity Breakdown</div>'
+        f'{"".join(rows_html)}'
+        f'{sp_html}'
         f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_passes_table_html(all_passes: List[Dict], active_pass_num: Optional[int] = None):
+    """Renders the Complete Pass Telemetry Log as a bespoke Obsidian HTML table."""
+    max_len = max((p["length_m"] for p in all_passes), default=50.0) or 50.0
+    body = []
+    for p in all_passes:
+        is_ok = bool(p["is_completed"])
+        dot_c = "dot-home" if p["team_id"] == 0 else "dot-away"
+        t_lbl = "Home" if p["team_id"] == 0 else "Away"
+        pill = '<span class="obs-pill obs-pill-ok">Completed</span>' if is_ok else '<span class="obs-pill obs-pill-miss">Intercepted</span>'
+        to_txt = f"#{p['target_id']}" if is_ok else f"#{p['target_id']} <span class='obs-muted'>(Opp)</span>"
+        bar_w = min(100.0, (p["length_m"] / max_len) * 100.0)
+        bar_c = "#10B981" if is_ok else "#E5484D"
+        tr_cls = ' class="row-active"' if p["pass_number"] == active_pass_num else ""
+        body.append(
+            f'<tr{tr_cls}>'
+            f'<td class="obs-rank">#{p["pass_number"]:02d}</td>'
+            f'<td class="obs-muted">{p["time_sec"]:.1f}s – {p["end_time_sec"]:.1f}s</td>'
+            f'<td><span class="obs-team"><span class="dot {dot_c}"></span>T{p["team_id"]} {t_lbl}</span></td>'
+            f'<td class="obs-player">#{p["player_id"]}</td>'
+            f'<td>{to_txt}</td>'
+            f'<td>{pill}</td>'
+            f'<td><span class="obs-pill obs-pill-tag">{p["subtype"]}</span></td>'
+            f'<td class="obs-num"><div class="obs-bar-cell"><span>{p["length_m"]:.1f} m</span><div class="obs-bar-track"><div class="obs-bar-fill" style="width:{bar_w:.0f}%;background:{bar_c};"></div></div></div></td>'
+            f'<td class="obs-num">{p["avg_speed_kmh"]:.1f}</td>'
+            f'<td class="obs-num" style="color:#94A3B8;">{p["peak_speed_kmh"]:.1f}</td>'
+            f'<td class="obs-num" style="color:#94A3B8;">{p["duration_sec"]:.2f}s</td>'
+            f'<td style="color:#94A3B8;font-size:0.75rem;">{p["zone"]}</td>'
+            f'</tr>'
+        )
+    st.markdown(
+        '<div class="obs-table-wrap"><div class="obs-table-scroll">'
+        '<table class="obs-table"><thead><tr>'
+        '<th>Pass</th><th>Window</th><th>Team</th><th>From</th><th>To</th>'
+        '<th>Outcome</th><th>Type</th><th class="num-h">Length</th>'
+        '<th class="num-h">Avg km/h</th><th class="num-h">Peak km/h</th>'
+        '<th class="num-h">Time</th><th>Target Zone</th>'
+        f'</tr></thead><tbody>{"".join(body)}</tbody></table></div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_physical_leaderboard_html(rows: List[Dict], active_pid: Optional[int] = None):
+    """Renders the Match Physical Leaderboard as a sleek Obsidian HTML table with micro-bars."""
+    max_dist = max((r["Distance (m)"] for r in rows), default=80.0) or 80.0
+    max_top = max((r["Top Speed (km/h)"] for r in rows), default=30.0) or 30.0
+    max_hsr = max((r["HSR >18 (m)"] for r in rows), default=25.0) or 25.0
+
+    body = []
+    for idx, r in enumerate(rows, start=1):
+        is_home = "Team 0" in r["Team"]
+        dot_c = "dot-home" if is_home else "dot-away"
+        t_short = "T0 Home" if is_home else "T1 Away"
+        t_bar = "#E5484D" if is_home else "#3B82F6"
+        pid_num = int(r["Player"].split()[0].replace("#", ""))
+        tr_cls = ' class="row-active"' if pid_num == active_pid else ""
+        rk_cls = "obs-rank obs-rank-top" if idx <= 3 else "obs-rank"
+
+        d_pct = min(100.0, (r["Distance (m)"] / max_dist) * 100.0)
+        v_pct = min(100.0, (r["Top Speed (km/h)"] / max_top) * 100.0)
+        h_pct = min(100.0, (r["HSR >18 (m)"] / max_hsr) * 100.0) if max_hsr > 0 else 0.0
+        sp_cnt = int(r["Sprints"])
+        sp_badge = (
+            f'<span class="obs-pill obs-pill-ok">{sp_cnt}</span>'
+            if sp_cnt > 0 else '<span class="obs-muted">0</span>'
+        )
+        body.append(
+            f'<tr{tr_cls}>'
+            f'<td class="{rk_cls}">{idx:02d}</td>'
+            f'<td><span class="obs-player"><span class="dot {dot_c}"></span>{r["Player"]}</span></td>'
+            f'<td><span class="obs-team">{t_short}</span></td>'
+            f'<td class="obs-num"><div class="obs-bar-cell"><span>{r["Distance (m)"]:.1f} m</span><div class="obs-bar-track"><div class="obs-bar-fill" style="width:{d_pct:.0f}%;background:{t_bar};"></div></div></div></td>'
+            f'<td class="obs-num">{r["Avg Speed (km/h)"]:.1f}</td>'
+            f'<td class="obs-num"><div class="obs-bar-cell"><span style="color:#F8FAFC;font-weight:600;">{r["Top Speed (km/h)"]:.1f}</span><div class="obs-bar-track"><div class="obs-bar-fill" style="width:{v_pct:.0f}%;background:#10B981;"></div></div></div></td>'
+            f'<td class="obs-num"><div class="obs-bar-cell"><span>{r["HSR >18 (m)"]:.1f} m</span><div class="obs-bar-track"><div class="obs-bar-fill" style="width:{h_pct:.0f}%;background:#F59E0B;"></div></div></div></td>'
+            f'<td class="obs-num" style="color:#94A3B8;">{r["Sprint >21 (m)"]:.1f} m</td>'
+            f'<td class="obs-num">{sp_badge}</td>'
+            f'<td class="obs-num" style="color:#94A3B8;">{r["Peak Accel (m/s²)"]:.2f}</td>'
+            f'</tr>'
+        )
+    st.markdown(
+        '<div class="obs-table-wrap"><div class="obs-table-scroll">'
+        '<table class="obs-table"><thead><tr>'
+        '<th>#</th><th>Player</th><th>Team</th><th class="num-h">Distance</th>'
+        '<th class="num-h">Avg km/h</th><th class="num-h">Top km/h</th>'
+        '<th class="num-h">HSR &gt;18</th><th class="num-h">Sprint &gt;21</th>'
+        '<th class="num-h">Sprints</th><th class="num-h">Peak m/s²</th>'
+        f'</tr></thead><tbody>{"".join(body)}</tbody></table></div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_spatial_summary_html(rows: List[Dict]):
+    """Renders the Spatial Player Dataset in Tab 4 as a sleek Obsidian HTML table."""
+    max_d = max((r["Est. Distance (m)"] for r in rows), default=80.0) or 80.0
+    body = []
+    for r in rows:
+        is_home = r["Team"] == "Team 0"
+        dot_c = "dot-home" if is_home else "dot-away"
+        t_bar = "#E5484D" if is_home else "#3B82F6"
+        d_pct = min(100.0, (r["Est. Distance (m)"] / max_d) * 100.0)
+        pres = float(r["Pitch Presence (%)"])
+        body.append(
+            f'<tr>'
+            f'<td><span class="obs-player"><span class="dot {dot_c}"></span>{r["Player ID"]}</span></td>'
+            f'<td><span class="obs-team">{"Home" if is_home else "Away"}</span></td>'
+            f'<td class="obs-num"><div class="obs-bar-cell"><span>{pres:.0f}%</span><div class="obs-bar-track"><div class="obs-bar-fill" style="width:{min(100.0, pres):.0f}%;background:#64748B;"></div></div></div></td>'
+            f'<td class="obs-num"><div class="obs-bar-cell"><span>{r["Est. Distance (m)"]:.1f} m</span><div class="obs-bar-track"><div class="obs-bar-fill" style="width:{d_pct:.0f}%;background:{t_bar};"></div></div></div></td>'
+            f'<td class="obs-num">{r["Avg Speed (km/h)"]:.1f}</td>'
+            f'<td class="obs-num" style="color:#34D399;">{r.get("Top Speed (km/h)", 0.0):.1f}</td>'
+            f'<td style="color:#94A3B8;font-size:0.74rem;">{r["Tactical Zone"]}</td>'
+            f'</tr>'
+        )
+    st.markdown(
+        '<div class="obs-table-wrap"><div class="obs-table-scroll" style="max-height:360px;">'
+        '<table class="obs-table"><thead><tr>'
+        '<th>Player</th><th>Team</th><th class="num-h">Presence</th>'
+        '<th class="num-h">Distance</th><th class="num-h">Avg km/h</th>'
+        '<th class="num-h">Top km/h</th><th>Tactical Role</th>'
+        f'</tr></thead><tbody>{"".join(body)}</tbody></table></div></div>',
         unsafe_allow_html=True,
     )
 
@@ -988,9 +1270,10 @@ with tab_team:
             label_visibility="collapsed",
         )
     with t_row_r:
+        cal_tag = "Optical GMC · FIFA Calibrated" if spatial_analytics.has_metric_calibration() else "2D Perspective Est."
         st.markdown(
             f'<div class="meta-pill"><span class="dot dot-accent"></span>'
-            f'{total_f / 25.0:.1f}s &nbsp;·&nbsp; {total_f} frames &nbsp;·&nbsp; {ball_cov:.0f}% ball lock</div>',
+            f'{total_f / 25.0:.1f}s &nbsp;·&nbsp; {ball_cov:.0f}% ball lock &nbsp;·&nbsp; {cal_tag}</div>',
             unsafe_allow_html=True,
         )
 
@@ -1246,10 +1529,10 @@ with tab_events:
         pass_rows = event_engine.get_passes_table()
         if pass_rows:
             pass_df = pd.DataFrame(pass_rows)
-            # Clean outcome text without emojis for cohesive editorial look
             if "Outcome" in pass_df.columns:
                 pass_df["Outcome"] = pass_df["Outcome"].str.replace("✅ ", "", regex=False).str.replace("❌ ", "", regex=False)
-            st.dataframe(pass_df, use_container_width=True, height=360, hide_index=True)
+            active_pnum = selected_pass["pass_number"] if filtered_passes else None
+            render_passes_table_html(all_passes, active_pass_num=active_pnum)
 
             dl_col, _ = st.columns([1.2, 4.8])
             with dl_col:
@@ -1357,14 +1640,18 @@ with tab_player:
                 ]),
             ])
 
-            # ---- Phase 3: Speed Zones & Velocity Profile ----
+            # ---- Phase 3: Speed Zones & Velocity Profile (Compact Side-by-Side) ----
+            cal_note = "Optical-Flow GMC + FIFA Height Scale" if spatial_analytics.has_metric_calibration() else "Smoothed 2D Pitch Scale"
             render_section_header(
                 "02",
-                "Speed Zones & Velocity Profile",
-                f"FIFA 5-zone intensity breakdown · HSR > 18 km/h · Sprint ≥ 21 km/h",
+                "Speed Profile & Intensity Zones",
+                f"{cal_note} · HSR > 18 km/h · Sprint ≥ 21 km/h",
             )
-            render_speed_zone_card(pp)
-            st.image(render_player_speed_chart(pp, team_id), use_column_width=True)
+            sp_left, sp_right = st.columns([1.35, 1.0], gap="medium")
+            with sp_left:
+                st.image(render_player_speed_chart(pp, team_id), use_column_width=True)
+            with sp_right:
+                render_speed_zone_panel(pp)
 
             # ---- Phase 3: Match Physical Leaderboard ----
             lb_filter = 0 if "Team 0" in team_filter else (1 if "Team 1" in team_filter else None)
@@ -1372,11 +1659,21 @@ with tab_player:
             render_section_header(
                 "03",
                 "Match Physical Leaderboard",
-                f"Ranked by peak velocity & distance ({len(lb_rows)} players)",
+                f"Active player (#{selected_pid}) highlighted · {len(lb_rows)} players tracked",
             )
             if lb_rows:
-                lb_df = pd.DataFrame(lb_rows)
-                st.dataframe(lb_df, use_container_width=True, height=340, hide_index=True)
+                lb_s1, lb_s2 = st.columns([1.3, 4.7], vertical_alignment="bottom")
+                with lb_s1:
+                    sort_col = st.selectbox(
+                        "Sort Leaderboard",
+                        ["Top Speed (km/h)", "Distance (m)", "HSR >18 (m)", "Sprints", "Avg Speed (km/h)"],
+                        index=0,
+                        key="phys_lb_sort",
+                    )
+                lb_sorted = sorted(lb_rows, key=lambda r: (-float(r[sort_col]), -float(r["Distance (m)"])))
+                render_physical_leaderboard_html(lb_sorted, active_pid=selected_pid)
+
+                lb_df = pd.DataFrame(lb_sorted)
                 dl_p, _ = st.columns([1.3, 4.7])
                 with dl_p:
                     st.download_button(
@@ -1407,8 +1704,8 @@ with tab_media:
         render_panel_label("Spatial Player Dataset", "11 vs 11 FIFA Standard")
         summary_rows = spatial_analytics.get_player_summary(min_frames=1)
         if summary_rows:
+            render_spatial_summary_html(summary_rows)
             df = pd.DataFrame(summary_rows)
-            st.dataframe(df, use_container_width=True, height=345, hide_index=True)
 
             dl_c, _ = st.columns([1.4, 2.6])
             with dl_c:

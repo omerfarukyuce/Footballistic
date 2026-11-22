@@ -43,6 +43,9 @@ class SpatialAnalytics:
         # Optional tracked ball coordinates in camera & 2D pitch space
         self.ball_track: List[Tuple[int, float, float]] = []
         self.ball_track_2d: List[Tuple[int, float, float]] = []
+        # Per-frame optical-flow camera motion matrices (2x3 affine) & metric scale calibration
+        self.frame_warps: List[List[List[float]]] = []
+        self.metric_calibration: Dict[str, float] = {}
         self.total_processed_frames: int = 0
 
     def add_position(
@@ -402,11 +405,65 @@ class SpatialAnalytics:
         self._pan_cache = pan
         return pan
 
+    def has_metric_calibration(self) -> bool:
+        """True when optical-flow camera warps and perspective height scale are available."""
+        return (
+            len(self.frame_warps) >= 10
+            and "height_slope" in self.metric_calibration
+            and "height_intercept" in self.metric_calibration
+        )
+
+    def y_cam_to_meters(self, cam_y: float) -> float:
+        """Maps a camera pixel row to pitch width coordinate [0..68m] via projective foreshortening."""
+        cal = self.metric_calibration
+        y_top = float(cal.get("y_top", self.height * 0.25))
+        y_bot = float(cal.get("y_bot", self.height * 0.90))
+        pk = float(cal.get("persp_k", 1.75))
+        u = float(np.clip((cam_y - y_top) / max(1.0, y_bot - y_top), 0.0, 1.0))
+        return self.PITCH_WIDTH_M * (((1.0 + pk) * u) / (1.0 + pk * u))
+
+    def px_per_meter_x(self, cam_y: float) -> float:
+        """Returns local horizontal pixels-per-meter at image row `cam_y` from standing player height law."""
+        cal = self.metric_calibration
+        slope = float(cal.get("height_slope", 0.06))
+        intercept = float(cal.get("height_intercept", 25.0))
+        # Effective YOLO standing bounding-box height (1.81m human + stride/box padding) ≈ 2.22m
+        eff_h_m = float(cal.get("eff_player_height_m", 2.22))
+        return max(8.0, (slope * cam_y + intercept) / max(1.5, eff_h_m))
+
+    def camera_step_to_meters(
+        self,
+        f_prev: int,
+        x0: float,
+        y0: float,
+        f_cur: int,
+        x1: float,
+        y1: float,
+    ) -> Tuple[float, float]:
+        """
+        Computes true camera-motion-free pitch displacement (dx_m, dy_m) between
+        (x0, y0) at `f_prev` and (x1, y1) at `f_cur` by composing exact optical-flow
+        camera warps and applying the local perspective Jacobian.
+        """
+        wx, wy = float(x0), float(y0)
+        n_w = len(self.frame_warps)
+        for fw in range(f_prev + 1, f_cur + 1):
+            if 0 <= fw < n_w and self.frame_warps[fw] is not None:
+                M = self.frame_warps[fw]
+                nwx = M[0][0] * wx + M[0][1] * wy + M[0][2]
+                nwy = M[1][0] * wx + M[1][1] * wy + M[1][2]
+                wx, wy = nwx, nwy
+        dx_m = (float(x1) - wx) / self.px_per_meter_x(0.5 * (wy + float(y1)))
+        dy_m = self.y_cam_to_meters(float(y1)) - self.y_cam_to_meters(wy)
+        return dx_m, dy_m
+
     def get_player_kinematics(self, tracker_id: int, fps: float = 25.0) -> Dict:
         """
-        Computes pan-compensated, temporally smoothed physical kinematics
+        Computes camera-motion-compensated, temporally smoothed physical kinematics
         (distance covered, average speed, peak speed, and instantaneous speed series)
         for `tracker_id`.
+        Uses exact optical-flow GMC (`frame_warps`) + FIFA player-height perspective
+        calibration when available, with graceful fallback to median-pan 2D estimation.
         """
         positions_2d = self.player_tracks_2d.get(tracker_id, [])
         cams = self.player_tracks.get(tracker_id, [])
@@ -423,15 +480,17 @@ class SpatialAnalytics:
             }
 
         # Filter out synthesized placeholder tracks (cam == (100.0, 100.0))
-        real_pts = []
+        real_pts_2d = []
+        real_cams = []
         real_frs = []
         for idx_p, (pt, fr) in enumerate(zip(positions_2d, frames)):
             if idx_p < len(cams) and abs(cams[idx_p][0] - 100.0) < 1e-3 and abs(cams[idx_p][1] - 100.0) < 1e-3:
                 continue
-            real_pts.append(pt)
+            real_pts_2d.append(pt)
+            real_cams.append(cams[idx_p] if idx_p < len(cams) else (0.0, 0.0))
             real_frs.append(int(fr))
 
-        if len(real_pts) < 3:
+        if len(real_pts_2d) < 3:
             return {
                 "distance_m": 0.0,
                 "avg_speed_kmh": 0.0,
@@ -441,29 +500,38 @@ class SpatialAnalytics:
                 "valid_frames": [],
             }
 
+        use_optical_gmc = self.has_metric_calibration() and len(real_cams) == len(real_pts_2d)
         scale_x = self.PITCH_LENGTH_M / max(1.0, self.FIELD_W)
         scale_y = self.PITCH_WIDTH_M / max(1.0, self.FIELD_H)
-        pan = self._get_global_pan_drift_m()
+        pan = {} if use_optical_gmc else self._get_global_pan_drift_m()
 
-        # Reconstruct camera-pan-compensated cumulative 2D path in meters
+        # Reconstruct camera-motion-free cumulative pitch path in meters
         cx, cy = 0.0, 0.0
-        comp_pts = [(real_pts[0][0] * scale_x, real_pts[0][1] * scale_y)]
+        comp_pts = [(0.0, 0.0)]
         valid_step = []
-        for i in range(1, len(real_pts)):
+        max_step_m_per_frame = (38.5 / 3.6) / fps
+
+        for i in range(1, len(real_pts_2d)):
             f0, f1 = real_frs[i - 1], real_frs[i]
             df = max(1, f1 - f0)
-            dx = (real_pts[i][0] - real_pts[i - 1][0]) * scale_x
-            dy = (real_pts[i][1] - real_pts[i - 1][1]) * scale_y
-            if df == 1 and f1 in pan:
-                dx -= pan[f1][0]
-                dy -= pan[f1][1]
-            # Ignore multi-frame re-entry jumps (> 5 frames) or impossible teleports (> 40 km/h)
-            is_ok_step = (df <= 5) and (math.hypot(dx, dy) / df <= (40.0 / 3.6) / fps)
+            if use_optical_gmc and df <= 5:
+                dx, dy = self.camera_step_to_meters(
+                    f0, real_cams[i - 1][0], real_cams[i - 1][1],
+                    f1, real_cams[i][0], real_cams[i][1],
+                )
+            else:
+                dx = (real_pts_2d[i][0] - real_pts_2d[i - 1][0]) * scale_x
+                dy = (real_pts_2d[i][1] - real_pts_2d[i - 1][1]) * scale_y
+                if df == 1 and f1 in pan:
+                    dx -= pan[f1][0]
+                    dy -= pan[f1][1]
+            # Ignore multi-frame re-entry jumps (> 5 frames) or impossible teleports (> 38.5 km/h)
+            is_ok_step = (df <= 5) and (math.hypot(dx, dy) / df <= max_step_m_per_frame)
             if is_ok_step:
                 cx += dx
                 cy += dy
             valid_step.append(is_ok_step)
-            comp_pts.append((comp_pts[0][0] + cx, comp_pts[0][1] + cy))
+            comp_pts.append((cx, cy))
 
         arr = np.asarray(comp_pts, dtype=np.float64)
         # Centered ~0.5s moving-average filter eliminates single-frame YOLO foot jitter
@@ -494,7 +562,7 @@ class SpatialAnalytics:
         # Dead-zone below 1.2 km/h removes stationary standing micro-jitter
         eff_mask = valid_mask & (raw_kmh >= 1.2)
         distance_m = float(np.sum((raw_kmh / 3.6) * dt_arr * eff_mask))
-        active_seconds = float(np.sum(dt_arr[valid_mask])) if np.any(valid_mask) else (len(real_pts) / fps)
+        active_seconds = float(np.sum(dt_arr[valid_mask])) if np.any(valid_mask) else (len(real_pts_2d) / fps)
         avg_speed_kmh = (distance_m / max(0.1, active_seconds)) * 3.6
 
         valid_spds = raw_kmh[valid_mask]
@@ -766,6 +834,11 @@ class SpatialAnalytics:
             "player_frames": {str(k): [int(f) for f in v] for k, v in self.player_frames.items()},
             "ball_track": [[int(f), float(x), float(y)] for f, x, y in self.ball_track],
             "ball_track_2d": [[int(f), float(x), float(y)] for f, x, y in self.ball_track_2d],
+            "frame_warps": [
+                [[round(float(v), 6) for v in row] for row in M] if M is not None else None
+                for M in self.frame_warps
+            ],
+            "metric_calibration": self.metric_calibration,
         }
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f)
@@ -803,4 +876,6 @@ class SpatialAnalytics:
             (int(p[0]), float(p[1]), float(p[2]))
             for p in data.get("ball_track_2d", [])
         ]
+        instance.frame_warps = data.get("frame_warps", [])
+        instance.metric_calibration = data.get("metric_calibration", {})
         return instance

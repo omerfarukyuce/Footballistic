@@ -460,8 +460,8 @@ def _style_ax(ax, xlabel: str, ylabel: str):
 
 
 def render_player_speed_chart(profile: Dict, team_id: int) -> np.ndarray:
-    """Renders an Obsidian-themed instantaneous speed timeline with HSR & Sprint zones."""
-    fig, ax = plt.subplots(figsize=(7.6, 3.1), facecolor=BG_FIG)
+    """Renders a compact Obsidian-themed instantaneous speed timeline with HSR & Sprint zones."""
+    fig, ax = plt.subplots(figsize=(6.8, 3.05), facecolor=BG_FIG)
     _style_ax(ax, "Match Time (s)", "Speed (km/h)")
 
     t = np.asarray(profile["timeline_t"], dtype=np.float64)

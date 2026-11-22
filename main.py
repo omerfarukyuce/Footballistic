@@ -643,6 +643,47 @@ def run_pipeline(
     pitch_2d_all_path = os.path.join(output_dir, "pitch_2d_heatmap_all.png")
     cv2.imwrite(pitch_2d_all_path, pitch_2d_all_img)
 
+    # Store optical-flow GMC camera warps & auto-calibrated FIFA player-height perspective scale
+    if isinstance(frame_warps, dict):
+        spatial_analytics.frame_warps = [
+            frame_warps[fi].tolist() if (fi in frame_warps and frame_warps[fi] is not None) else None
+            for fi in range(frames_to_process)
+        ]
+    else:
+        spatial_analytics.frame_warps = [
+            M.tolist() if M is not None else None for M in frame_warps
+        ]
+    cal_ys, cal_hs = [], []
+    for pid_c, f_map in clean_tracks.items():
+        for fr_c, bb_c in list(f_map.items())[::5]:
+            x1, y1, x2, y2 = bb_c
+            bh, bw = y2 - y1, x2 - x1
+            if 22.0 < bh < 180.0 and 0.22 < (bw / max(1.0, bh)) < 0.72:
+                cal_ys.append(float(y2))
+                cal_hs.append(float(bh))
+    if len(cal_ys) >= 20:
+        ys_a, hs_a = np.asarray(cal_ys), np.asarray(cal_hs)
+        h_slope, h_ic = np.polyfit(ys_a, hs_a, 1)
+        resid = np.abs(hs_a - (h_slope * ys_a + h_ic))
+        keep = resid <= np.percentile(resid, 82)
+        h_slope, h_ic = np.polyfit(ys_a[keep], hs_a[keep], 1)
+        # True touchline Y bounds from verified on-pitch player feet (excludes apron/dugouts)
+        y_top_med = max(cam_h * 0.15, float(np.percentile(ys_a, 1)) - 14.0)
+        y_bot_med = min(cam_h * 0.95, float(np.percentile(ys_a, 99)) + 28.0)
+        # Projective center-spot row (34m line sits at u = 1 / (2 + persp_k) ≈ 0.267)
+        y_center = y_top_med + (1.0 / (2.0 + 1.75)) * (y_bot_med - y_top_med)
+        ppm_mid = max(10.0, (float(h_slope) * y_center + float(h_ic)) / 2.22)
+        spatial_analytics.metric_calibration = {
+            "height_slope": round(float(h_slope), 6),
+            "height_intercept": round(float(h_ic), 3),
+            "eff_player_height_m": 2.22,
+            "y_top": round(y_top_med, 1),
+            "y_bot": round(y_bot_med, 1),
+            "persp_k": 1.75,
+            "fov_length_m": round(cam_w / ppm_mid, 1),
+            "method": "optical_flow_gmc+fifa_height",
+        }
+
     # Phase 2: Individual Pass Visuals, Ball Possession & Match Event Spotting
     event_engine = MatchEventEngine(spatial_analytics, fps=video_info["fps"])
     poss = event_engine.get_possession_summary()

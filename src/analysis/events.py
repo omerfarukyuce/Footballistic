@@ -633,21 +633,44 @@ class MatchEventEngine:
                     self.player_pass_stats[nxt.player_id]["recoveries"] += 1
                 continue
 
-            # Compute true arc length & instantaneous peak speed along ball_path_2d
+            # Compute true length, arc length & instantaneous peak speed along ball trajectory
+            # When optical-flow GMC & FIFA perspective height calibration are available,
+            # integrate exact camera-motion-free ground displacement!
             arc_m = 0.0
             step_speeds_kmh: List[float] = []
             b_frames_in_pass = [f for f in range(kick_f, recv_f + 1) if f in self._f_ball]
-            for k in range(1, len(b_frames_in_pass)):
-                fa, fb = b_frames_in_pass[k - 1], b_frames_in_pass[k]
-                ma = self._px2d_to_m(self._f_ball[fa][2], self._f_ball[fa][3])
-                mb = self._px2d_to_m(self._f_ball[fb][2], self._f_ball[fb][3])
-                seg_m = math.hypot(mb[0] - ma[0], mb[1] - ma[1])
-                dt_seg = (fb - fa) / self.fps
-                arc_m += seg_m
-                if dt_seg > 0:
-                    sp_k = (seg_m / dt_seg) * 3.6
-                    if sp_k <= 135.0:  # reject single-frame tracking jitter spikes
-                        step_speeds_kmh.append(sp_k)
+
+            if self.sa.has_metric_calibration() and len(b_frames_in_pass) >= 2:
+                cum_dx_m, cum_dy_m = 0.0, 0.0
+                for k in range(1, len(b_frames_in_pass)):
+                    fa, fb = b_frames_in_pass[k - 1], b_frames_in_pass[k]
+                    xa, ya = self._f_ball[fa][0], self._f_ball[fa][1]
+                    xb, yb = self._f_ball[fb][0], self._f_ball[fb][1]
+                    dx_m, dy_m = self.sa.camera_step_to_meters(fa, xa, ya, fb, xb, yb)
+                    seg_m = math.hypot(dx_m, dy_m)
+                    dt_seg = (fb - fa) / self.fps
+                    cum_dx_m += dx_m
+                    cum_dy_m += dy_m
+                    arc_m += seg_m
+                    if dt_seg > 0:
+                        sp_k = (seg_m / dt_seg) * 3.6
+                        if sp_k <= 135.0:
+                            step_speeds_kmh.append(sp_k)
+                cal_len = round(math.hypot(cum_dx_m, cum_dy_m), 1)
+                if cal_len >= 2.0:
+                    length_m = cal_len
+            else:
+                for k in range(1, len(b_frames_in_pass)):
+                    fa, fb = b_frames_in_pass[k - 1], b_frames_in_pass[k]
+                    ma = self._px2d_to_m(self._f_ball[fa][2], self._f_ball[fa][3])
+                    mb = self._px2d_to_m(self._f_ball[fb][2], self._f_ball[fb][3])
+                    seg_m = math.hypot(mb[0] - ma[0], mb[1] - ma[1])
+                    dt_seg = (fb - fa) / self.fps
+                    arc_m += seg_m
+                    if dt_seg > 0:
+                        sp_k = (seg_m / dt_seg) * 3.6
+                        if sp_k <= 135.0:  # reject single-frame tracking jitter spikes
+                            step_speeds_kmh.append(sp_k)
 
             arc_length_m = round(max(length_m, arc_m), 1)
             avg_speed_ms = round(length_m / max(0.12, duration_sec), 1)
