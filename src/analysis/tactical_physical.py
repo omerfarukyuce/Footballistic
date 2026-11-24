@@ -545,6 +545,9 @@ def render_tactical_shape_chart(dynamics: TacticalDynamicsEngine, target_team: O
         if len(s1["t"]) >= 2:
             ax.plot(s1["t"], s1["block_len"], color=COL_AWAY, linewidth=2.1, label="Team 1 Block Depth")
             ax.plot(s1["t"], s1["def_line"], color=COL_AWAY, linewidth=1.4, linestyle="--", alpha=0.72, label="Team 1 Def. Line")
+        all_vals = s0["block_len"] + s0["def_line"] + s1["block_len"] + s1["def_line"]
+        if all_vals:
+            ax.set_ylim(max(0.0, min(all_vals) - 6.0), max(all_vals) + 18.0)
         ax.set_title("Comparative Structural Compactness & Defensive Line", color=TXT_PRI, fontsize=9.3, fontweight="bold", loc="left", pad=10)
 
     leg = ax.legend(loc="upper right", frameon=True, facecolor="#131720", edgecolor=SPINE_COL, fontsize=7.5, labelcolor=TXT_SEC, ncol=2)

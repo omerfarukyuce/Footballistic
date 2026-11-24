@@ -898,7 +898,7 @@ def render_passes_table_html(all_passes: List[Dict], active_pass_num: Optional[i
             f'<td class="obs-rank">#{p["pass_number"]:02d}</td>'
             f'<td class="obs-muted">{p["time_sec"]:.1f}s – {p["end_time_sec"]:.1f}s</td>'
             f'<td><span class="obs-team"><span class="dot {dot_c}"></span>T{p["team_id"]} {t_lbl}</span></td>'
-            f'<td class="obs-player">#{p["player_id"]}</td>'
+            f'<td><span class="obs-player">#{p["player_id"]}</span></td>'
             f'<td>{to_txt}</td>'
             f'<td>{pill}</td>'
             f'<td><span class="obs-pill obs-pill-tag">{p["subtype"]}</span></td>'
@@ -910,7 +910,7 @@ def render_passes_table_html(all_passes: List[Dict], active_pass_num: Optional[i
             f'</tr>'
         )
     st.markdown(
-        '<div class="obs-table-wrap"><div class="obs-table-scroll">'
+        '<div class="obs-table-wrap"><div class="obs-table-scroll" style="max-height:520px;">'
         '<table class="obs-table"><thead><tr>'
         '<th>Pass</th><th>Window</th><th>Team</th><th>From</th><th>To</th>'
         '<th>Outcome</th><th>Type</th><th class="num-h">Length</th>'
@@ -960,7 +960,7 @@ def render_physical_leaderboard_html(rows: List[Dict], active_pid: Optional[int]
             f'</tr>'
         )
     st.markdown(
-        '<div class="obs-table-wrap"><div class="obs-table-scroll">'
+        '<div class="obs-table-wrap"><div class="obs-table-scroll" style="max-height:520px;">'
         '<table class="obs-table"><thead><tr>'
         '<th>#</th><th>Player</th><th>Team</th><th class="num-h">Distance</th>'
         '<th class="num-h">Avg km/h</th><th class="num-h">Top km/h</th>'
